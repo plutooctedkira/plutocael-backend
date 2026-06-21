@@ -18,16 +18,11 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', message: 'plutocael backend is running' });
 });
 
-// 测试数据库连接
-app.get('/api/test-db', async (req, res) => {
-  try {
-    const { data, error } = await supabase.from('settings').select('*').limit(1);
-    if (error) throw error;
-    res.json({ connected: true, data });
-  } catch (err) {
-    res.json({ connected: false, error: err.message });
-  }
-});
+// API 路由
+app.use('/api/sessions', require('./routes/sessions')(supabase));
+app.use('/api/messages', require('./routes/messages')(supabase));
+app.use('/api/memories', require('./routes/memories')(supabase));
+app.use('/api/settings', require('./routes/settings')(supabase));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
