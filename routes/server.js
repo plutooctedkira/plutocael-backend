@@ -23,7 +23,6 @@ app.use('/api/sessions', require('./routes/sessions')(supabase));
 app.use('/api/messages', require('./routes/messages')(supabase));
 app.use('/api/memories', require('./routes/memories')(supabase));
 app.use('/api/settings', require('./routes/settings')(supabase));
-app.use('/api/chat', require('./routes/chat')(supabase));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
