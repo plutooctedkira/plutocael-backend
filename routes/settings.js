@@ -1,48 +1,37 @@
 const express = require('express');
 const router = express.Router();
+const { queryOne, run } = require('../db');
 
-module.exports = function(supabase) {
-  // 获取设置（只有一行）
-  router.get('/', async (req, res) => {
-    try {
-      const { data, error } = await supabase
-        .from('settings')
-        .select('*')
-        .limit(1)
-        .single();
-      if (error) throw error;
-      res.json(data);
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
-  });
+// 获取设置
+router.get('/', (req, res) => {
+  try {
+    const data = queryOne("SELECT * FROM settings LIMIT 1");
+    if (!data) return res.status(404).json({ error: '设置不存在' });
+    res.json(data);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
 
-  // 更新设置
-  router.put('/:id', async (req, res) => {
-    try {
-      const updates = {};
-      const allowed = [
-        'system_prompt', 'temperature', 'max_context_rounds',
-        'max_context_tokens', 'compress_threshold',
-        'compress_keep_rounds', 'max_reply_tokens'
-      ];
-      for (const key of allowed) {
-        if (req.body[key] !== undefined) updates[key] = req.body[key];
+// 更新设置
+router.put('/:id', (req, res) => {
+  try {
+    const allowed = ['system_prompt', 'temperature', 'max_context_rounds',
+      'max_context_tokens', 'compress_threshold', 'compress_keep_rounds', 'max_reply_tokens'];
+    const updates = [];
+    const values = [];
+    for (const key of allowed) {
+      if (req.body[key] !== undefined) {
+        updates.push(`${key} = ?`);
+        values.push(req.body[key]);
       }
-      updates.updated_at = new Date().toISOString();
-
-      const { data, error } = await supabase
-        .from('settings')
-        .update(updates)
-        .eq('id', req.params.id)
-        .select()
-        .single();
-      if (error) throw error;
-      res.json(data);
-    } catch (err) {
-      res.status(500).json({ error: err.message });
     }
-  });
+    if (updates.length > 0) {
+      updates.push("updated_at = datetime('now', '+8 hours')");
+      values.push(req.params.id);
+      run(`UPDATE settings SET ${updates.join(', ')} WHERE id = ?`, values);
+    }
+    const data = queryOne("SELECT * FROM settings WHERE id = ?", [req.params.id]);
+    res.json(data);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
 
-  return router;
-};
+module.exports = router;
