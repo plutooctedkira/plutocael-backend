@@ -1,7 +1,6 @@
 const express = require('express');
 const router = express.Router();
 const { queryAll, queryOne, run } = require('../db');
-const { fetchMemories } = require('../mcp-client');
 
 // 共用的上下文组装逻辑
 async function buildContext(session_id) {
@@ -13,18 +12,16 @@ async function buildContext(session_id) {
     [session_id, (settings.max_context_rounds || 10) * 2]
   ).reverse();
 
-  const memories = await fetchMemories(20);
-
   const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
-  const memoryBlock = memories.length > 0
-    ? '\n\n<memories>\n' + memories.map(m => `【${m.title}】${m.content}`).join('\n\n') + '\n</memories>'
-    : '';
 
   const systemPrompt = (settings.system_prompt || '你是Cael。')
-    + `\n\n当前时间：${now}`
-    + memoryBlock;
+    + `\n\n当前时间：${now}`;
 
-  return { settings, history, systemPrompt };
+  const apiBaseUrl = (settings.api_base_url || process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com') + '/v1/messages';
+  const apiKey = settings.api_key || process.env.ANTHROPIC_API_KEY;
+  const model = settings.model || process.env.CLAUDE_MODEL || 'claude-sonnet-4-20250514';
+
+  return { settings, history, systemPrompt, apiBaseUrl, apiKey, model };
 }
 
 // 非流式
@@ -35,14 +32,13 @@ router.post('/', async (req, res) => {
 
     run("INSERT INTO messages (session_id, role, content) VALUES (?, 'user', ?)", [session_id, content]);
 
-    const { settings, history, systemPrompt } = await buildContext(session_id);
+    const { settings, history, systemPrompt, apiBaseUrl, apiKey, model } = await buildContext(session_id);
 
-    const apiUrl = (process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com') + '/v1/messages';
-    const apiRes = await fetch(apiUrl, {
+    const apiRes = await fetch(apiBaseUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+      headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
       body: JSON.stringify({
-        model: process.env.CLAUDE_MODEL || 'claude-sonnet-4-20250514',
+        model,
         max_tokens: settings.max_reply_tokens || 2000,
         temperature: settings.temperature || 1,
         system: systemPrompt,
@@ -70,19 +66,18 @@ router.post('/stream', async (req, res) => {
 
     run("INSERT INTO messages (session_id, role, content) VALUES (?, 'user', ?)", [session_id, content]);
 
-    const { settings, history, systemPrompt } = await buildContext(session_id);
+    const { settings, history, systemPrompt, apiBaseUrl, apiKey, model } = await buildContext(session_id);
 
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
     res.setHeader('X-Accel-Buffering', 'no');
 
-    const apiUrl = (process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com') + '/v1/messages';
-    const apiRes = await fetch(apiUrl, {
+    const apiRes = await fetch(apiBaseUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+      headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
       body: JSON.stringify({
-        model: process.env.CLAUDE_MODEL || 'claude-sonnet-4-20250514',
+        model,
         max_tokens: settings.max_reply_tokens || 2000,
         temperature: settings.temperature || 1,
         system: systemPrompt,

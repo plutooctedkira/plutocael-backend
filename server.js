@@ -17,6 +17,7 @@ app.use('/api/sessions', require('./routes/sessions'));
 app.use('/api/messages', require('./routes/messages'));
 app.use('/api/settings', require('./routes/settings'));
 app.use('/api/chat', require('./routes/chat'));
+app.use('/api/memories', require('./routes/memories'));
 
 const PORT = process.env.PORT || 3000;
 

@@ -52,6 +52,17 @@ async function initDB() {
       updated_at DATETIME DEFAULT (datetime('now', '+8 hours'))
     )
   `);
+  db.run(`
+    CREATE TABLE IF NOT EXISTS memories (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      content TEXT NOT NULL,
+      category TEXT DEFAULT '生活',
+      importance INTEGER DEFAULT 3 CHECK(importance >= 1 AND importance <= 5),
+      last_accessed DATETIME,
+      created_at DATETIME DEFAULT (datetime('now', '+8 hours')),
+      updated_at DATETIME DEFAULT (datetime('now', '+8 hours'))
+    )
+  `);
 
   // 确保settings表有一行默认数据
   const row = db.exec("SELECT COUNT(*) as count FROM settings");
