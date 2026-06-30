@@ -3,21 +3,57 @@ const { SSEClientTransport } = require('@modelcontextprotocol/sdk/client/sse.js'
 
 const MCP_URL = process.env.MCP_URL || 'https://mcp.plutocael.icu/mcp';
 
+async function connectMCP() {
+  const transport = new SSEClientTransport(new URL(MCP_URL));
+  const client = new Client({ name: 'plutocael-backend', version: '1.0.0' });
+  await client.connect(transport);
+  return client;
+}
+
+// 获取 MCP 服务器上所有可用工具列表
+async function listTools() {
+  let client;
+  try {
+    client = await connectMCP();
+    const result = await client.listTools();
+    await client.close();
+    return (result && result.tools) ? result.tools.map(t => ({ name: t.name, description: t.description || '', inputSchema: t.inputSchema || {} })) : [];
+  } catch (err) {
+    console.error('MCP listTools 失败:', err.message);
+    if (client) try { await client.close(); } catch (e) {}
+    return [];
+  }
+}
+
+// 调用 MCP 工具
+async function callTool(toolName, args = {}) {
+  let client;
+  try {
+    client = await connectMCP();
+    const result = await client.callTool({ name: toolName, arguments: args });
+    await client.close();
+    if (result && result.content) {
+      const textBlock = result.content.find(b => b.type === 'text');
+      if (textBlock) return { success: true, output: textBlock.text };
+      return { success: true, output: JSON.stringify(result.content) };
+    }
+    return { success: true, output: '(无输出)' };
+  } catch (err) {
+    console.error('MCP callTool 失败:', err.message);
+    if (client) try { await client.close(); } catch (e) {}
+    return { success: false, error: err.message };
+  }
+}
+
 async function fetchMemories(limit = 20) {
   let client;
   try {
-    const transport = new SSEClientTransport(new URL(MCP_URL));
-    client = new Client({ name: 'plutocael-backend', version: '1.0.0' });
-    await client.connect(transport);
-
+    client = await connectMCP();
     const result = await client.callTool({
       name: 'memory_list',
       arguments: { limit, sort_by: 'importance', sort_order: 'desc' }
     });
-
     await client.close();
-
-    // 解析返回的记忆数据
     if (result && result.content) {
       const textBlock = result.content.find(b => b.type === 'text');
       if (textBlock) {
@@ -35,9 +71,7 @@ async function fetchMemories(limit = 20) {
     return [];
   } catch (err) {
     console.error('MCP记忆读取失败:', err.message);
-    if (client) {
-      try { await client.close(); } catch (e) {}
-    }
+    if (client) try { await client.close(); } catch (e) {}
     return [];
   }
 }
@@ -45,17 +79,12 @@ async function fetchMemories(limit = 20) {
 async function searchMemories(query, limit = 10) {
   let client;
   try {
-    const transport = new SSEClientTransport(new URL(MCP_URL));
-    client = new Client({ name: 'plutocael-backend', version: '1.0.0' });
-    await client.connect(transport);
-
+    client = await connectMCP();
     const result = await client.callTool({
       name: 'memory_search',
       arguments: { query, limit }
     });
-
     await client.close();
-
     if (result && result.content) {
       const textBlock = result.content.find(b => b.type === 'text');
       if (textBlock) {
@@ -73,11 +102,9 @@ async function searchMemories(query, limit = 10) {
     return [];
   } catch (err) {
     console.error('MCP记忆搜索失败:', err.message);
-    if (client) {
-      try { await client.close(); } catch (e) {}
-    }
+    if (client) try { await client.close(); } catch (e) {}
     return [];
   }
 }
 
-module.exports = { fetchMemories, searchMemories };
+module.exports = { listTools, callTool, fetchMemories, searchMemories, MCP_URL };
