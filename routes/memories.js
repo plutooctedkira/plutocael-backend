@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { queryAll, queryOne, run, lastInsertId } = require('../db');
+const { embedPost } = require('../vector-search');
 
 // 获取所有记忆（支持按分类筛选）
 router.get('/', (req, res) => {
@@ -76,6 +77,12 @@ router.post('/', (req, res) => {
     );
 
     const id = lastInsertId();
+
+    // 异步触发 Embedding（不阻塞响应）
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    const apiBaseUrl = (process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com') + '/v1/messages';
+    embedPost(id, content, apiKey, apiBaseUrl).catch(e => console.warn('Post embed failed:', e.message));
+
     const memory = queryOne('SELECT * FROM memories WHERE id = ?', [id]);
     res.json(memory);
   } catch (err) {
