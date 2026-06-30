@@ -20,6 +20,7 @@ app.use('/api/chat', require('./routes/chat'));
 app.use('/api/memories', require('./routes/memories'));
 app.use('/api/search', require('./routes/search'));
 app.use('/api/gateway', require('./routes/gateway'));
+app.use('/api/mcp', require('./routes/mcp'));
 
 const PORT = process.env.PORT || 3000;
 
