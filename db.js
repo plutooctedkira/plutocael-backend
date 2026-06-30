@@ -69,6 +69,12 @@ async function initDB() {
     db.run("ALTER TABLE sessions ADD COLUMN summary TEXT DEFAULT NULL");
   } catch (e) { /* 列已存在 */ }
 
+  // 初始化向量搜索表
+  try {
+    const { initVectorTables } = require('./vector-search');
+    await initVectorTables();
+  } catch (e) { console.warn('Vector table init skipped:', e.message); }
+
   // 确保settings表有一行默认数据
   const row = db.exec("SELECT COUNT(*) as count FROM settings");
   if (row[0].values[0][0] === 0) {
