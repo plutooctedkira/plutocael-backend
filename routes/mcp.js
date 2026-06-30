@@ -1,4 +1,6 @@
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
 const router = express.Router();
 const { listTools, callTool, fetchMemories, searchMemories, MCP_URL } = require('../mcp-client');
 
@@ -54,6 +56,19 @@ router.get('/search', async (req, res) => {
   } catch (err) {
     console.error('MCP search error:', err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// 读取 mcp_config.json 返回配置列表
+router.get('/list', (req, res) => {
+  try {
+    const configPath = path.join(__dirname, '..', 'mcp_config.json');
+    const raw = fs.readFileSync(configPath, 'utf-8');
+    const servers = JSON.parse(raw);
+    res.json({ ok: true, data: servers });
+  } catch (err) {
+    console.error('MCP list error:', err.message);
+    res.status(500).json({ error: '配置文件读取失败' });
   }
 });
 

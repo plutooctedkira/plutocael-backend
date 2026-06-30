@@ -1,0 +1,35 @@
+[
+  {
+    "id": 1,
+    "name": "MCP记忆服务器",
+    "url": "https://mcp.plutocael.icu/mcp",
+    "status": "deployed",
+    "deployedAt": "2026-06-23 20:02",
+    "tools": ["memory_list", "memory_search", "create_document", "copy_document"],
+    "command": "node mcp-server.js",
+    "args": "--config /etc/mcp/config.json",
+    "env": "NODE_ENV=production\nLOG_LEVEL=info"
+  },
+  {
+    "id": 2,
+    "name": "记忆处理器",
+    "url": "https://mcp.plutocael.icu/memory",
+    "status": "running",
+    "deployedAt": "2026-06-20 14:30",
+    "tools": ["summarize", "search_memory", "list_memory"],
+    "command": "python memory_service.py",
+    "args": "",
+    "env": "API_KEY=sk-xxx"
+  },
+  {
+    "id": 3,
+    "name": "文件管理器",
+    "url": "https://mcp.plutocael.icu/files",
+    "status": "stopped",
+    "deployedAt": "2026-06-15 09:00",
+    "tools": ["read_file", "write_file", "list_directory"],
+    "command": "node file-manager.js",
+    "args": "--port 3001",
+    "env": "STORAGE_PATH=/data/files"
+  }
+]
