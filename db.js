@@ -75,6 +75,45 @@ async function initDB() {
     await initVectorTables();
   } catch (e) { console.warn('Vector table init skipped:', e.message); }
 
+  // API 网关表
+  db.run(`
+    CREATE TABLE IF NOT EXISTS gateway_usage (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT DEFAULT '',
+      model TEXT DEFAULT '',
+      input_tokens INTEGER DEFAULT 0,
+      output_tokens INTEGER DEFAULT 0,
+      cache_read_tokens INTEGER DEFAULT 0,
+      cache_write_tokens INTEGER DEFAULT 0,
+      cost_usd REAL DEFAULT 0,
+      created_at DATETIME DEFAULT (datetime('now', '+8 hours'))
+    )
+  `);
+  db.run(`
+    CREATE TABLE IF NOT EXISTS pricing_config (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      model TEXT NOT NULL,
+      input_price REAL NOT NULL,
+      output_price REAL NOT NULL,
+      cache_read_price REAL DEFAULT 0,
+      cache_write_price REAL DEFAULT 0,
+      is_current INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT (datetime('now', '+8 hours'))
+    )
+  `);
+
+  // 确保 pricing_config 有默认数据
+  const pr = db.exec("SELECT COUNT(*) as count FROM pricing_config");
+  if (pr[0].values[0][0] === 0) {
+    db.run("INSERT INTO pricing_config (name, model, input_price, output_price, cache_read_price, cache_write_price, is_current) VALUES (?, ?, ?, ?, ?, ?, 1)", [
+      'Claude Sonnet 4', 'claude-sonnet-4-20250514', 3.0, 15.0, 0.3, 3.75
+    ]);
+    db.run("INSERT INTO pricing_config (name, model, input_price, output_price, cache_read_price, cache_write_price, is_current) VALUES (?, ?, ?, ?, ?, ?, 0)", [
+      'Claude Opus 4', 'claude-opus-4-6', 15.0, 75.0, 1.5, 18.75
+    ]);
+  }
+
   // 确保settings表有一行默认数据
   const row = db.exec("SELECT COUNT(*) as count FROM settings");
   if (row[0].values[0][0] === 0) {
