@@ -64,6 +64,11 @@ async function initDB() {
     )
   `);
 
+  // 迁移：为 sessions 表添加 summary 列（如果不存在）
+  try {
+    db.run("ALTER TABLE sessions ADD COLUMN summary TEXT DEFAULT NULL");
+  } catch (e) { /* 列已存在 */ }
+
   // 确保settings表有一行默认数据
   const row = db.exec("SELECT COUNT(*) as count FROM settings");
   if (row[0].values[0][0] === 0) {

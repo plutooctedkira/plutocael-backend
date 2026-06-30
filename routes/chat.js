@@ -2,15 +2,97 @@ const express = require('express');
 const router = express.Router();
 const { queryAll, queryOne, run } = require('../db');
 
+// 消息压缩：当消息数超过阈值，用 Claude 总结旧消息
+async function compressOldMessages(session_id, threshold = 40, keepRecent = 20) {
+  try {
+    const all = queryAll("SELECT id, role, content FROM messages WHERE session_id = ? AND visible = 1 ORDER BY id ASC", [session_id]);
+    if (all.length <= threshold) return;
+
+    const recent = all.slice(-keepRecent);
+    const old = all.slice(0, -keepRecent);
+    const total = old.length;
+    if (total === 0) return;
+
+    // 近期（最后40%）→ 详细，中期（中间30%）→ 概括，早期（最前30%）→ 极简
+    const recentStart = Math.floor(total * 0.6);
+    const midStart = Math.floor(total * 0.3);
+    const oldRecent = old.slice(recentStart);
+    const oldMid = old.slice(midStart, recentStart);
+    const oldEarly = old.slice(0, midStart);
+
+    const buildLayer = (msgs) => msgs.map(m => `[${m.role}]: ${m.content}`).join('\n');
+    const layerText = `【近期对话-详细记录】\n${buildLayer(oldRecent)}\n\n【中期对话-概括】\n${buildLayer(oldMid)}\n\n【早期对话-极简记录】\n${buildLayer(oldEarly)}`;
+
+    const compressPrompt = `请将以下分层对话历史压缩成摘要。
+${layerText}
+输出要求：
+用第三人称。按以下格式输出：
+【近期】（500-800字）详细记录最近的对话
+【中期】（200-350字）概括较早的对话
+【早期】（80-150字）极简记录最早的对话
+关键规则：
+1. 必须保留所有日程、日期、时间、约定
+2. 必须保留具体的数字、人名、地点
+3. 必须保留所有承诺和待办
+4. 禁止用"讨论了""聊到了"这种空话替代具体内容`;
+
+    const settings = queryOne("SELECT * FROM settings LIMIT 1");
+    const apiBaseUrl = ((settings && settings.api_base_url) || process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com') + '/v1/messages';
+    const apiKey = (settings && settings.api_key) || process.env.ANTHROPIC_API_KEY;
+    const compressModels = ['claude-opus-4-6', 'claude-sonnet-4-6'];
+
+    let summary = null;
+    for (const model of compressModels) {
+      try {
+        const resp = await fetch(apiBaseUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+          body: JSON.stringify({
+            model,
+            max_tokens: 2000,
+            temperature: 0.3,
+            system: '你是一个专业的对话摘要助手。请严格按照要求的格式输出摘要，保留所有关键信息。',
+            messages: [{ role: 'user', content: compressPrompt }]
+          })
+        });
+        if (!resp.ok) continue;
+        const data = await resp.json();
+        summary = data.content.filter(b => b.type === 'text').map(b => b.text).join('').trim();
+        if (summary) break;
+      } catch (e) {}
+    }
+    if (!summary) return; // 摘要失败不打断主流程
+
+    run("UPDATE sessions SET summary = ? WHERE id = ?", [summary, session_id]);
+
+    // 删除已压缩的旧消息
+    const oldIds = old.map(m => m.id);
+    if (oldIds.length > 0) {
+      const placeholders = oldIds.map(() => '?').join(',');
+      run(`DELETE FROM messages WHERE id IN (${placeholders})`, oldIds);
+    }
+  } catch (e) { /* 压缩异常不打断对话 */ }
+}
+
 // 共用的上下文组装逻辑
 async function buildContext(session_id) {
   const settings = queryOne("SELECT * FROM settings LIMIT 1");
   if (!settings) throw new Error("设置不存在");
 
+  // 先尝试压缩旧消息
+  await compressOldMessages(session_id);
+
+  // 取当前可见消息
   const history = queryAll(
     "SELECT role, content FROM messages WHERE session_id = ? AND visible = 1 ORDER BY created_at DESC LIMIT ?",
     [session_id, (settings.max_context_rounds || 10) * 2]
   ).reverse();
+
+  // 如果有摘要，放在历史消息最前面
+  const sess = queryOne("SELECT summary FROM sessions WHERE id = ?", [session_id]);
+  if (sess && sess.summary) {
+    history.unshift({ role: 'assistant', content: `[对话历史摘要]\n${sess.summary}` });
+  }
 
   const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
 
