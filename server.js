@@ -18,6 +18,8 @@ app.use('/api/messages', require('./routes/messages'));
 app.use('/api/settings', require('./routes/settings'));
 app.use('/api/chat', require('./routes/chat'));
 app.use('/api/memories', require('./routes/memories'));
+app.use('/api/search', require('./routes/search'));
+app.use('/api/gateway', require('./routes/gateway'));
 
 const PORT = process.env.PORT || 3000;
 
