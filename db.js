@@ -70,7 +70,7 @@ async function initDB() {
   } catch (e) { /* 列已存在 */ }
 
   // 迁移：settings 表的 API 配置列（chat.js 依赖这三列，新库需要补上）
-  for (const col of ['api_base_url TEXT', 'api_key TEXT', 'model TEXT']) {
+  for (const col of ['api_base_url TEXT', 'api_key TEXT', 'model TEXT', 'enable_thinking INTEGER DEFAULT 0']) {
     try { db.run(`ALTER TABLE settings ADD COLUMN ${col}`); } catch (e) { /* 列已存在 */ }
   }
 

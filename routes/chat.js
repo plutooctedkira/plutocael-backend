@@ -97,14 +97,38 @@ async function buildContext(session_id) {
 
   const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
 
-  const systemPrompt = (settings.system_prompt || '你是Cael。')
+  let systemPrompt = (settings.system_prompt || '你是Cael。')
     + `\n\n当前时间：${now}`;
+
+  // 注入记忆库：按重要性取前20条，作为对话背景
+  const mems = queryAll("SELECT content, category, importance FROM memories ORDER BY importance DESC, updated_at DESC LIMIT 20");
+  if (mems.length > 0) {
+    systemPrompt += '\n\n【记忆库】以下是之前保存的记忆，是过去窗口留下的信息：\n'
+      + mems.map(m => `- [${m.category}] ${m.content}`).join('\n');
+  }
 
   const apiBaseUrl = (settings.api_base_url || process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com') + '/v1/messages';
   const apiKey = settings.api_key || process.env.ANTHROPIC_API_KEY;
   const model = settings.model || process.env.CLAUDE_MODEL || 'claude-sonnet-4-6';
 
   return { settings, history, systemPrompt, apiBaseUrl, apiKey, model };
+}
+
+// 组装请求体：开启 thinking 时用 adaptive 模式（此时不传 temperature，两者不兼容）
+function buildRequestBody(settings, model, systemPrompt, history, stream = false) {
+  const body = {
+    model,
+    max_tokens: settings.max_reply_tokens || 2000,
+    system: systemPrompt,
+    messages: history.map(m => ({ role: m.role, content: m.content }))
+  };
+  if (settings.enable_thinking) {
+    body.thinking = { type: 'adaptive' };
+  } else {
+    body.temperature = settings.temperature ?? 1;
+  }
+  if (stream) body.stream = true;
+  return body;
 }
 
 // 非流式
@@ -120,26 +144,21 @@ router.post('/', async (req, res) => {
     const apiRes = await fetch(apiBaseUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({
-        model,
-        max_tokens: settings.max_reply_tokens || 2000,
-        temperature: settings.temperature ?? 1,
-        system: systemPrompt,
-        messages: history.map(m => ({ role: m.role, content: m.content }))
-      })
+      body: JSON.stringify(buildRequestBody(settings, model, systemPrompt, history))
     });
 
     if (!apiRes.ok) { const errBody = await apiRes.text(); throw new Error(`Claude API 错误 ${apiRes.status}: ${errBody}`); }
 
     const apiData = await apiRes.json();
     const reply = apiData.content.filter(b => b.type === 'text').map(b => b.text).join('');
+    const reasoning = apiData.content.filter(b => b.type === 'thinking').map(b => b.thinking).join('') || null;
 
     try { logUsage(session_id, model, apiData.usage); } catch (e) { console.warn('logUsage failed:', e.message); }
 
-    run("INSERT INTO messages (session_id, role, content) VALUES (?, 'assistant', ?)", [session_id, reply]);
+    run("INSERT INTO messages (session_id, role, content, reasoning_content) VALUES (?, 'assistant', ?, ?)", [session_id, reply, reasoning]);
     run("UPDATE sessions SET updated_at = datetime('now', '+8 hours') WHERE id = ?", [session_id]);
 
-    res.json({ role: 'assistant', content: reply });
+    res.json({ role: 'assistant', content: reply, reasoning_content: reasoning });
   } catch (err) { console.error('Chat error:', err); res.status(500).json({ error: err.message }); }
 });
 
@@ -161,14 +180,7 @@ router.post('/stream', async (req, res) => {
     const apiRes = await fetch(apiBaseUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({
-        model,
-        max_tokens: settings.max_reply_tokens || 2000,
-        temperature: settings.temperature ?? 1,
-        system: systemPrompt,
-        messages: history.map(m => ({ role: m.role, content: m.content })),
-        stream: true
-      })
+      body: JSON.stringify(buildRequestBody(settings, model, systemPrompt, history, true))
     });
 
     if (!apiRes.ok) {
@@ -179,6 +191,7 @@ router.post('/stream', async (req, res) => {
     }
 
     let fullReply = '';
+    let fullThinking = '';
     const usage = {};
     const reader = apiRes.body.getReader();
     const decoder = new TextDecoder();
@@ -199,6 +212,9 @@ router.post('/stream', async (req, res) => {
           if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
             fullReply += event.delta.text;
             res.write(`data: ${JSON.stringify({ type: 'text', text: event.delta.text })}\n\n`);
+          } else if (event.type === 'content_block_delta' && event.delta?.type === 'thinking_delta') {
+            fullThinking += event.delta.thinking;
+            res.write(`data: ${JSON.stringify({ type: 'thinking', text: event.delta.thinking })}\n\n`);
           } else if (event.type === 'message_start' && event.message?.usage) {
             Object.assign(usage, event.message.usage);
           } else if (event.type === 'message_delta' && event.usage) {
@@ -211,7 +227,7 @@ router.post('/stream', async (req, res) => {
     }
 
     if (fullReply) {
-      run("INSERT INTO messages (session_id, role, content) VALUES (?, 'assistant', ?)", [session_id, fullReply]);
+      run("INSERT INTO messages (session_id, role, content, reasoning_content) VALUES (?, 'assistant', ?, ?)", [session_id, fullReply, fullThinking || null]);
       run("UPDATE sessions SET updated_at = datetime('now', '+8 hours') WHERE id = ?", [session_id]);
       try { logUsage(session_id, model, usage.output_tokens ? usage : null); } catch (e) { console.warn('logUsage failed:', e.message); }
     }

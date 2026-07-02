@@ -15,7 +15,8 @@ router.get('/', (req, res) => {
 router.put('/:id', (req, res) => {
   try {
     const allowed = ['system_prompt', 'temperature', 'max_context_rounds',
-      'max_context_tokens', 'compress_threshold', 'compress_keep_rounds', 'max_reply_tokens'];
+      'max_context_tokens', 'compress_threshold', 'compress_keep_rounds', 'max_reply_tokens',
+      'api_base_url', 'api_key', 'model', 'enable_thinking'];
     const updates = [];
     const values = [];
     for (const key of allowed) {
