@@ -8,9 +8,7 @@ router.get('/', async (req, res) => {
     const q = req.query.q;
     if (!q) return res.status(400).json({ error: '需要查询参数 q' });
     const limit = parseInt(req.query.limit) || 8;
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    const apiBaseUrl = (process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com') + '/v1/messages';
-    const results = await hybridSearch(q, limit, apiKey, apiBaseUrl, true);
+    const results = await hybridSearch(q, limit, true);
     res.json({ query: q, results });
   } catch (err) {
     console.error('Search error:', err);

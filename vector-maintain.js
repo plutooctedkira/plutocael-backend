@@ -16,12 +16,9 @@ async function runMaintenance() {
   await initDB();
   console.log('[vector-maintain] Database initialized');
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  const apiBaseUrl = (process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com') + '/v1/messages';
-
   // 1. Embedding 新的对话 chunks
   console.log('[vector-maintain] [1/4] Embedding chat chunks...');
-  await embedChatChunks(10, apiKey, apiBaseUrl);
+  await embedChatChunks(10);
   console.log('[vector-maintain] Chat chunks embedded');
 
   // 2. 重建关系图谱

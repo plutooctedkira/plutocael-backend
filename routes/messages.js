@@ -5,7 +5,7 @@ const { queryAll, run } = require('../db');
 // 获取某个会话的所有消息
 router.get('/session/:sessionId', (req, res) => {
   try {
-    const data = queryAll("SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC", [req.params.sessionId]);
+    const data = queryAll("SELECT * FROM messages WHERE session_id = ? ORDER BY id ASC", [req.params.sessionId]);
     res.json(data);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -13,7 +13,7 @@ router.get('/session/:sessionId', (req, res) => {
 // 获取某个会话的可见消息
 router.get('/session/:sessionId/visible', (req, res) => {
   try {
-    const data = queryAll("SELECT * FROM messages WHERE session_id = ? AND visible = 1 ORDER BY created_at ASC", [req.params.sessionId]);
+    const data = queryAll("SELECT * FROM messages WHERE session_id = ? AND visible = 1 ORDER BY id ASC", [req.params.sessionId]);
     res.json(data);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });

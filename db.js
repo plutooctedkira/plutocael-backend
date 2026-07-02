@@ -69,6 +69,11 @@ async function initDB() {
     db.run("ALTER TABLE sessions ADD COLUMN summary TEXT DEFAULT NULL");
   } catch (e) { /* 列已存在 */ }
 
+  // 迁移：settings 表的 API 配置列（chat.js 依赖这三列，新库需要补上）
+  for (const col of ['api_base_url TEXT', 'api_key TEXT', 'model TEXT']) {
+    try { db.run(`ALTER TABLE settings ADD COLUMN ${col}`); } catch (e) { /* 列已存在 */ }
+  }
+
   // 初始化向量搜索表
   try {
     const { initVectorTables } = require('./vector-search');
@@ -107,12 +112,15 @@ async function initDB() {
   const pr = db.exec("SELECT COUNT(*) as count FROM pricing_config");
   if (pr[0].values[0][0] === 0) {
     db.run("INSERT INTO pricing_config (name, model, input_price, output_price, cache_read_price, cache_write_price, is_current) VALUES (?, ?, ?, ?, ?, ?, 1)", [
-      'Claude Sonnet 4', 'claude-sonnet-4-20250514', 3.0, 15.0, 0.3, 3.75
+      'Claude Sonnet 4.6', 'claude-sonnet-4-6', 3.0, 15.0, 0.3, 3.75
     ]);
     db.run("INSERT INTO pricing_config (name, model, input_price, output_price, cache_read_price, cache_write_price, is_current) VALUES (?, ?, ?, ?, ?, ?, 0)", [
-      'Claude Opus 4', 'claude-opus-4-6', 15.0, 75.0, 1.5, 18.75
+      'Claude Opus 4.6', 'claude-opus-4-6', 5.0, 25.0, 0.5, 6.25
     ]);
   }
+
+  // 迁移：修正旧数据里 Opus 4.6 配错的定价（实际为 $5/$25，不是 $15/$75）
+  db.run("UPDATE pricing_config SET name = 'Claude Opus 4.6', input_price = 5.0, output_price = 25.0, cache_read_price = 0.5, cache_write_price = 6.25 WHERE model = 'claude-opus-4-6' AND input_price = 15.0");
 
   // 确保settings表有一行默认数据
   const row = db.exec("SELECT COUNT(*) as count FROM settings");

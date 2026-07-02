@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { queryAll, queryOne, run } = require('../db');
+const { logUsage } = require('../gateway-tracker');
 
 // 消息压缩：当消息数超过阈值，用 Claude 总结旧消息
 async function compressOldMessages(session_id, threshold = 40, keepRecent = 20) {
@@ -84,7 +85,7 @@ async function buildContext(session_id) {
 
   // 取当前可见消息
   const history = queryAll(
-    "SELECT role, content FROM messages WHERE session_id = ? AND visible = 1 ORDER BY created_at DESC LIMIT ?",
+    "SELECT role, content FROM messages WHERE session_id = ? AND visible = 1 ORDER BY id DESC LIMIT ?",
     [session_id, (settings.max_context_rounds || 10) * 2]
   ).reverse();
 
@@ -101,7 +102,7 @@ async function buildContext(session_id) {
 
   const apiBaseUrl = (settings.api_base_url || process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com') + '/v1/messages';
   const apiKey = settings.api_key || process.env.ANTHROPIC_API_KEY;
-  const model = settings.model || process.env.CLAUDE_MODEL || 'claude-sonnet-4-20250514';
+  const model = settings.model || process.env.CLAUDE_MODEL || 'claude-sonnet-4-6';
 
   return { settings, history, systemPrompt, apiBaseUrl, apiKey, model };
 }
@@ -122,7 +123,7 @@ router.post('/', async (req, res) => {
       body: JSON.stringify({
         model,
         max_tokens: settings.max_reply_tokens || 2000,
-        temperature: settings.temperature || 1,
+        temperature: settings.temperature ?? 1,
         system: systemPrompt,
         messages: history.map(m => ({ role: m.role, content: m.content }))
       })
@@ -132,6 +133,8 @@ router.post('/', async (req, res) => {
 
     const apiData = await apiRes.json();
     const reply = apiData.content.filter(b => b.type === 'text').map(b => b.text).join('');
+
+    try { logUsage(session_id, model, apiData.usage); } catch (e) { console.warn('logUsage failed:', e.message); }
 
     run("INSERT INTO messages (session_id, role, content) VALUES (?, 'assistant', ?)", [session_id, reply]);
     run("UPDATE sessions SET updated_at = datetime('now', '+8 hours') WHERE id = ?", [session_id]);
@@ -161,7 +164,7 @@ router.post('/stream', async (req, res) => {
       body: JSON.stringify({
         model,
         max_tokens: settings.max_reply_tokens || 2000,
-        temperature: settings.temperature || 1,
+        temperature: settings.temperature ?? 1,
         system: systemPrompt,
         messages: history.map(m => ({ role: m.role, content: m.content })),
         stream: true
@@ -176,6 +179,7 @@ router.post('/stream', async (req, res) => {
     }
 
     let fullReply = '';
+    const usage = {};
     const reader = apiRes.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
@@ -190,12 +194,15 @@ router.post('/stream', async (req, res) => {
       for (const line of lines) {
         if (!line.startsWith('data: ')) continue;
         const data = line.slice(6).trim();
-        if (data === '[DONE]') continue;
         try {
           const event = JSON.parse(data);
           if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
             fullReply += event.delta.text;
             res.write(`data: ${JSON.stringify({ type: 'text', text: event.delta.text })}\n\n`);
+          } else if (event.type === 'message_start' && event.message?.usage) {
+            Object.assign(usage, event.message.usage);
+          } else if (event.type === 'message_delta' && event.usage) {
+            Object.assign(usage, event.usage);
           } else if (event.type === 'message_stop') {
             res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
           }
@@ -206,6 +213,7 @@ router.post('/stream', async (req, res) => {
     if (fullReply) {
       run("INSERT INTO messages (session_id, role, content) VALUES (?, 'assistant', ?)", [session_id, fullReply]);
       run("UPDATE sessions SET updated_at = datetime('now', '+8 hours') WHERE id = ?", [session_id]);
+      try { logUsage(session_id, model, usage.output_tokens ? usage : null); } catch (e) { console.warn('logUsage failed:', e.message); }
     }
     res.end();
   } catch (err) {

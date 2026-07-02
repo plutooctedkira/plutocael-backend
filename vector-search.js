@@ -38,45 +38,43 @@ async function initVectorTables() {
 }
 
 // ============================================================
-// 向量生成 —— 调用 Anthropic API 获取 embedding
+// 向量生成 —— Anthropic 没有 embedding API，语义向量走 Voyage AI
+// 配置 VOYAGE_API_KEY 时用真实语义向量，否则用本地字符哈希方案
 // ============================================================
-async function encodeText(text, apiKey, apiBaseUrl) {
-  if (!apiKey || !apiBaseUrl) {
-    // 回退到简易本地 embedding（用于开发/测试）
-    return await localEncode(text);
+async function encodeText(text) {
+  const voyageKey = process.env.VOYAGE_API_KEY;
+  if (!voyageKey) {
+    return localEncode(text);
   }
   try {
-    const url = apiBaseUrl.replace(/\/v1\/messages\/?$/, '') + '/v1/embeddings';
-    const resp = await fetch(url, {
+    const resp = await fetch('https://api.voyageai.com/v1/embeddings', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01'
+        'Authorization': `Bearer ${voyageKey}`
       },
       body: JSON.stringify({
-        model: 'claude-voyage-3',
-        input: text.substring(0, 8000),
-        encoding_format: 'float'
+        model: process.env.VOYAGE_MODEL || 'voyage-3.5',
+        input: text.substring(0, 8000)
       })
     });
     if (!resp.ok) {
-      console.warn('[vector-search] Embedding API error, falling back to local');
-      return await localEncode(text);
+      console.warn('[vector-search] Voyage API error', resp.status, ', falling back to local');
+      return localEncode(text);
     }
     const data = await resp.json();
     if (data.data && data.data[0] && data.data[0].embedding) {
       return data.data[0].embedding;
     }
-    return await localEncode(text);
+    return localEncode(text);
   } catch (e) {
-    console.warn('[vector-search] Embedding request failed, local fallback:', e.message);
-    return await localEncode(text);
+    console.warn('[vector-search] Voyage request failed, local fallback:', e.message);
+    return localEncode(text);
   }
 }
 
 // 简易本地 embedding（TF-IDF 风格的正交投影，维度固定 128）
-async function localEncode(text) {
+function localEncode(text) {
   const dim = 128;
   const vec = new Array(dim).fill(0);
   const chars = text.split('');
@@ -103,6 +101,8 @@ function jsonToVec(json) {
 // 余弦相似度
 // ============================================================
 function cosineSim(a, b) {
+  // 本地向量（128维）和 Voyage 向量（1024维）不可比，直接返回 0
+  if (!a || !b || a.length !== b.length) return 0;
   let dot = 0, normA = 0, normB = 0;
   for (let i = 0; i < a.length; i++) {
     dot += a[i] * b[i];
@@ -165,15 +165,15 @@ class SimpleBM25 {
 // ============================================================
 // Embedding 记忆帖子
 // ============================================================
-async function embedPost(postId, content, apiKey, apiBaseUrl) {
-  const vec = await encodeText(content.substring(0, 500), apiKey, apiBaseUrl);
+async function embedPost(postId, content) {
+  const vec = await encodeText(content.substring(0, 500));
   run("INSERT OR REPLACE INTO post_embeddings (post_id, embedding) VALUES (?, ?)", [postId, vecToJson(vec)]);
 }
 
 // ============================================================
 // Embedding 对话 Chunks（每 10 条一个 chunk）
 // ============================================================
-async function embedChatChunks(chunkSize = 10, apiKey, apiBaseUrl) {
+async function embedChatChunks(chunkSize = 10) {
   const sessions = queryAll("SELECT DISTINCT session_id FROM messages WHERE visible = 1 ORDER BY session_id");
   for (const { session_id } of sessions) {
     const msgs = queryAll("SELECT id, role, content FROM messages WHERE session_id = ? AND visible = 1 ORDER BY id", [session_id]);
@@ -185,7 +185,7 @@ async function embedChatChunks(chunkSize = 10, apiKey, apiBaseUrl) {
       const exist = queryOne("SELECT id FROM chat_chunk_embeddings WHERE session_id = ? AND msg_id_start = ? AND msg_id_end = ?", [session_id, msgIdStart, msgIdEnd]);
       if (exist) continue;
       const chunkText = chunk.map(m => `[${m.role}] ${m.content}`).join('\n').substring(0, 800);
-      const vec = await encodeText(chunkText, apiKey, apiBaseUrl);
+      const vec = await encodeText(chunkText);
       run("INSERT INTO chat_chunk_embeddings (session_id, msg_id_start, msg_id_end, chunk_text, embedding) VALUES (?, ?, ?, ?, ?)", [session_id, msgIdStart, msgIdEnd, chunkText, vecToJson(vec)]);
     }
   }
@@ -194,8 +194,8 @@ async function embedChatChunks(chunkSize = 10, apiKey, apiBaseUrl) {
 // ============================================================
 // 混合搜索
 // ============================================================
-async function hybridSearch(query, limit = 8, apiKey, apiBaseUrl, includeChat = true, types = null) {
-  const queryVec = await encodeText(query, apiKey, apiBaseUrl);
+async function hybridSearch(query, limit = 8, includeChat = true) {
+  const queryVec = await encodeText(query);
   const results = {};
 
   // 搜索 posts
@@ -245,6 +245,7 @@ async function hybridSearch(query, limit = 8, apiKey, apiBaseUrl, includeChat = 
           results[key].score = 0.7 * results[key].vecScore + 0.3 * normScore;
         } else {
           results[key] = {
+            id: chunks[i].session_id,
             type: 'chat',
             content: chunks[i].chunk_text,
             vecScore: 0,
@@ -270,10 +271,10 @@ function forgettingCurveCleanup() {
   const day14 = new Date(now - 14 * 24 * 3600 * 1000);
   const day30 = new Date(now - 30 * 24 * 3600 * 1000);
 
-  const chunks = queryAll("SELECT id, updated_at FROM chat_chunk_embeddings ORDER BY updated_at");
+  const chunks = queryAll("SELECT id, session_id, updated_at FROM chat_chunk_embeddings ORDER BY updated_at");
   const grouped = {};
   for (const c of chunks) {
-    const sessionId = queryOne("SELECT session_id FROM chat_chunk_embeddings WHERE id = ?", [c.id]).session_id || 1;
+    const sessionId = c.session_id || 1;
     if (!grouped[sessionId]) grouped[sessionId] = [];
     grouped[sessionId].push(c);
   }
