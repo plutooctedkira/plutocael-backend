@@ -2,6 +2,43 @@ const express = require('express');
 const router = express.Router();
 const { queryAll, queryOne, run } = require('../db');
 const { logUsage } = require('../gateway-tracker');
+const { listTools, callTool } = require('../mcp-client');
+
+// MCP 工具列表缓存（60秒），避免每条消息都连一次 MCP 服务器
+let mcpToolsCache = { tools: [], ts: 0 };
+async function getMcpTools() {
+  if (Date.now() - mcpToolsCache.ts < 60000) return mcpToolsCache.tools;
+  const raw = await listTools();
+  const tools = raw.map(t => ({
+    name: t.name,
+    description: t.description || '',
+    input_schema: (t.inputSchema && t.inputSchema.type) ? t.inputSchema : { type: 'object', properties: {} }
+  }));
+  mcpToolsCache = { tools, ts: Date.now() };
+  return tools;
+}
+
+// 执行一批工具调用，返回 tool_result 块（并记录日志行）
+async function execToolUses(toolUses, toolLogLines, onEvent) {
+  const toolResults = [];
+  for (const tu of toolUses) {
+    toolLogLines.push(`→ 调用 ${tu.name} ${JSON.stringify(tu.input || {})}`);
+    if (onEvent) onEvent({ type: 'tool_use', name: tu.name, input: tu.input || {} });
+    const result = await callTool(tu.name, tu.input || {});
+    const outputText = result.success ? String(result.output) : `工具调用失败: ${result.error}`;
+    toolLogLines.push(`✓ 返回: ${outputText.substring(0, 300)}`);
+    if (onEvent) onEvent({ type: 'tool_result', name: tu.name, output: outputText.substring(0, 500) });
+    toolResults.push({
+      type: 'tool_result',
+      tool_use_id: tu.id,
+      content: outputText.substring(0, 4000),
+      ...(result.success ? {} : { is_error: true })
+    });
+  }
+  return toolResults;
+}
+
+const MAX_TOOL_ROUNDS = 5;
 
 // 消息压缩：当消息数超过阈值，用 Claude 总结旧消息
 async function compressOldMessages(session_id, threshold = 40, keepRecent = 20) {
@@ -115,18 +152,19 @@ async function buildContext(session_id) {
 }
 
 // 组装请求体：开启 thinking 时用 adaptive 模式（此时不传 temperature，两者不兼容）
-function buildRequestBody(settings, model, systemPrompt, history, stream = false) {
+function buildRequestBody(settings, model, systemPrompt, messages, stream = false, tools = null) {
   const body = {
     model,
     max_tokens: settings.max_reply_tokens || 2000,
     system: systemPrompt,
-    messages: history.map(m => ({ role: m.role, content: m.content }))
+    messages: messages.map(m => ({ role: m.role, content: m.content }))
   };
   if (settings.enable_thinking) {
     body.thinking = { type: 'adaptive' };
   } else {
     body.temperature = settings.temperature ?? 1;
   }
+  if (tools && tools.length > 0) body.tools = tools;
   if (stream) body.stream = true;
   return body;
 }
@@ -141,24 +179,43 @@ router.post('/', async (req, res) => {
 
     const { settings, history, systemPrompt, apiBaseUrl, apiKey, model } = await buildContext(session_id);
 
-    const apiRes = await fetch(apiBaseUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify(buildRequestBody(settings, model, systemPrompt, history))
-    });
+    // MCP 工具（开关开启且服务器可达时启用，失败则退化为普通聊天）
+    let mcpTools = [];
+    if (settings.enable_mcp) { try { mcpTools = await getMcpTools(); } catch (e) {} }
 
-    if (!apiRes.ok) { const errBody = await apiRes.text(); throw new Error(`Claude API 错误 ${apiRes.status}: ${errBody}`); }
+    const messages = history.map(m => ({ role: m.role, content: m.content }));
+    let reply = '', reasoning = '';
+    const toolLogLines = [];
 
-    const apiData = await apiRes.json();
-    const reply = apiData.content.filter(b => b.type === 'text').map(b => b.text).join('');
-    const reasoning = apiData.content.filter(b => b.type === 'thinking').map(b => b.thinking).join('') || null;
+    for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+      const apiRes = await fetch(apiBaseUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify(buildRequestBody(settings, model, systemPrompt, messages, false, mcpTools))
+      });
 
-    try { logUsage(session_id, model, apiData.usage); } catch (e) { console.warn('logUsage failed:', e.message); }
+      if (!apiRes.ok) { const errBody = await apiRes.text(); throw new Error(`Claude API 错误 ${apiRes.status}: ${errBody}`); }
 
-    run("INSERT INTO messages (session_id, role, content, reasoning_content) VALUES (?, 'assistant', ?, ?)", [session_id, reply, reasoning]);
+      const apiData = await apiRes.json();
+      try { logUsage(session_id, model, apiData.usage); } catch (e) { console.warn('logUsage failed:', e.message); }
+
+      reply += apiData.content.filter(b => b.type === 'text').map(b => b.text).join('');
+      reasoning += apiData.content.filter(b => b.type === 'thinking').map(b => b.thinking).join('');
+
+      if (apiData.stop_reason !== 'tool_use') break;
+
+      // Cael 要调工具：执行后把结果喂回去继续
+      const toolUses = apiData.content.filter(b => b.type === 'tool_use');
+      messages.push({ role: 'assistant', content: apiData.content });
+      const toolResults = await execToolUses(toolUses, toolLogLines);
+      messages.push({ role: 'user', content: toolResults });
+    }
+
+    const toolLog = toolLogLines.length ? toolLogLines.join('\n') : null;
+    run("INSERT INTO messages (session_id, role, content, reasoning_content, tool_log) VALUES (?, 'assistant', ?, ?, ?)", [session_id, reply, reasoning || null, toolLog]);
     run("UPDATE sessions SET updated_at = datetime('now', '+8 hours') WHERE id = ?", [session_id]);
 
-    res.json({ role: 'assistant', content: reply, reasoning_content: reasoning });
+    res.json({ role: 'assistant', content: reply, reasoning_content: reasoning || null, tool_log: toolLog });
   } catch (err) { console.error('Chat error:', err); res.status(500).json({ error: err.message }); }
 });
 
@@ -177,57 +234,105 @@ router.post('/stream', async (req, res) => {
     res.setHeader('Connection', 'keep-alive');
     res.setHeader('X-Accel-Buffering', 'no');
 
-    const apiRes = await fetch(apiBaseUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify(buildRequestBody(settings, model, systemPrompt, history, true))
-    });
+    const sse = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
 
-    if (!apiRes.ok) {
-      const errBody = await apiRes.text();
-      res.write(`data: ${JSON.stringify({ type: 'error', text: errBody })}\n\n`);
-      res.end();
-      return;
-    }
+    // MCP 工具（开关开启且服务器可达时启用，失败则退化为普通聊天）
+    let mcpTools = [];
+    if (settings.enable_mcp) { try { mcpTools = await getMcpTools(); } catch (e) {} }
 
+    const messages = history.map(m => ({ role: m.role, content: m.content }));
     let fullReply = '';
     let fullThinking = '';
+    const toolLogLines = [];
     const usage = {};
-    const reader = apiRes.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop();
+    for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+      const apiRes = await fetch(apiBaseUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify(buildRequestBody(settings, model, systemPrompt, messages, true, mcpTools))
+      });
 
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        const data = line.slice(6).trim();
-        try {
-          const event = JSON.parse(data);
-          if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
-            fullReply += event.delta.text;
-            res.write(`data: ${JSON.stringify({ type: 'text', text: event.delta.text })}\n\n`);
-          } else if (event.type === 'content_block_delta' && event.delta?.type === 'thinking_delta') {
-            fullThinking += event.delta.thinking;
-            res.write(`data: ${JSON.stringify({ type: 'thinking', text: event.delta.thinking })}\n\n`);
-          } else if (event.type === 'message_start' && event.message?.usage) {
-            Object.assign(usage, event.message.usage);
-          } else if (event.type === 'message_delta' && event.usage) {
-            Object.assign(usage, event.usage);
-          } else if (event.type === 'message_stop') {
-            res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
-          }
-        } catch (e) {}
+      if (!apiRes.ok) {
+        const errBody = await apiRes.text();
+        sse({ type: 'error', text: errBody });
+        res.end();
+        return;
       }
+
+      // 解析本轮 SSE，重组内容块（工具调用循环需要把完整的块喂回 API）
+      const assistantContent = [];
+      let curBlock = null, curJson = '';
+      let stopReason = null, roundOutput = 0;
+      const reader = apiRes.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const event = JSON.parse(line.slice(6).trim());
+            if (event.type === 'content_block_start') {
+              const b = event.content_block;
+              if (b.type === 'tool_use') { curBlock = { type: 'tool_use', id: b.id, name: b.name }; curJson = ''; }
+              else if (b.type === 'thinking') curBlock = { type: 'thinking', thinking: '' };
+              else if (b.type === 'redacted_thinking') curBlock = { type: 'redacted_thinking', data: b.data };
+              else curBlock = { type: 'text', text: '' };
+            } else if (event.type === 'content_block_delta' && curBlock) {
+              const d = event.delta;
+              if (d.type === 'text_delta') {
+                curBlock.text += d.text; fullReply += d.text;
+                sse({ type: 'text', text: d.text });
+              } else if (d.type === 'thinking_delta') {
+                curBlock.thinking += d.thinking; fullThinking += d.thinking;
+                sse({ type: 'thinking', text: d.thinking });
+              } else if (d.type === 'signature_delta') {
+                curBlock.signature = (curBlock.signature || '') + d.signature;
+              } else if (d.type === 'input_json_delta') {
+                curJson += d.partial_json;
+              }
+            } else if (event.type === 'content_block_stop' && curBlock) {
+              if (curBlock.type === 'tool_use') {
+                try { curBlock.input = curJson ? JSON.parse(curJson) : {}; } catch (e) { curBlock.input = {}; }
+              }
+              assistantContent.push(curBlock);
+              curBlock = null;
+            } else if (event.type === 'message_start' && event.message?.usage) {
+              for (const [k, v] of Object.entries(event.message.usage)) {
+                if (typeof v === 'number' && k !== 'output_tokens') usage[k] = (usage[k] || 0) + v;
+              }
+            } else if (event.type === 'message_delta') {
+              if (event.delta?.stop_reason) stopReason = event.delta.stop_reason;
+              if (event.usage?.output_tokens) roundOutput = event.usage.output_tokens;
+            }
+          } catch (e) {}
+        }
+      }
+
+      usage.output_tokens = (usage.output_tokens || 0) + roundOutput;
+
+      if (stopReason !== 'tool_use') break;
+
+      // Cael 要调工具：执行后把结果喂回去，进入下一轮
+      const toolUses = assistantContent.filter(b => b.type === 'tool_use');
+      if (toolUses.length === 0) break;
+      messages.push({ role: 'assistant', content: assistantContent });
+      const toolResults = await execToolUses(toolUses, toolLogLines, sse);
+      messages.push({ role: 'user', content: toolResults });
     }
 
+    sse({ type: 'done' });
+
     if (fullReply) {
-      run("INSERT INTO messages (session_id, role, content, reasoning_content) VALUES (?, 'assistant', ?, ?)", [session_id, fullReply, fullThinking || null]);
+      run("INSERT INTO messages (session_id, role, content, reasoning_content, tool_log) VALUES (?, 'assistant', ?, ?, ?)",
+        [session_id, fullReply, fullThinking || null, toolLogLines.length ? toolLogLines.join('\n') : null]);
       run("UPDATE sessions SET updated_at = datetime('now', '+8 hours') WHERE id = ?", [session_id]);
       try { logUsage(session_id, model, usage.output_tokens ? usage : null); } catch (e) { console.warn('logUsage failed:', e.message); }
     }

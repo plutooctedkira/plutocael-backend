@@ -70,9 +70,12 @@ async function initDB() {
   } catch (e) { /* 列已存在 */ }
 
   // 迁移：settings 表的 API 配置列（chat.js 依赖这三列，新库需要补上）
-  for (const col of ['api_base_url TEXT', 'api_key TEXT', 'model TEXT', 'enable_thinking INTEGER DEFAULT 0']) {
+  for (const col of ['api_base_url TEXT', 'api_key TEXT', 'model TEXT', 'enable_thinking INTEGER DEFAULT 0', 'enable_mcp INTEGER DEFAULT 1']) {
     try { db.run(`ALTER TABLE settings ADD COLUMN ${col}`); } catch (e) { /* 列已存在 */ }
   }
+
+  // 迁移：messages 表的工具调用日志列
+  try { db.run("ALTER TABLE messages ADD COLUMN tool_log TEXT DEFAULT NULL"); } catch (e) { /* 列已存在 */ }
 
   // 初始化向量搜索表
   try {
@@ -164,15 +167,22 @@ function queryOne(sql, params = []) {
 }
 
 // 执行写操作并保存
+// 注意：save() 里的 db.export() 会重开连接、清掉 last_insert_rowid，
+// 所以必须在 save() 之前把 rowid 抓出来存好
+let _lastInsertId = 0;
 function run(sql, params = []) {
   db.run(sql, params);
+  try {
+    const r = db.exec("SELECT last_insert_rowid()");
+    const id = r[0] && r[0].values[0][0];
+    if (id) _lastInsertId = id;
+  } catch (e) { /* 非INSERT语句忽略 */ }
   save();
 }
 
 // 获取最后插入的ID
 function lastInsertId() {
-  const result = db.exec("SELECT last_insert_rowid()");
-  return result[0].values[0][0];
+  return _lastInsertId;
 }
 
 module.exports = { initDB, getDB, save, queryAll, queryOne, run, lastInsertId };
