@@ -222,6 +222,7 @@ async function hybridSearch(query, limit = 8, includeChat = true) {
       if (sim > 0.3) {
         results[`chat_${ch.id}`] = {
           id: ch.session_id,
+          chunkId: ch.id,
           type: 'chat',
           content: ch.summary || ch.chunk_text,
           vecScore: sim,
@@ -246,6 +247,7 @@ async function hybridSearch(query, limit = 8, includeChat = true) {
         } else {
           results[key] = {
             id: chunks[i].session_id,
+            chunkId: chunks[i].id,
             type: 'chat',
             content: chunks[i].chunk_text,
             vecScore: 0,
@@ -253,6 +255,31 @@ async function hybridSearch(query, limit = 8, includeChat = true) {
             score: 0.3 * normScore
           };
         }
+      }
+    }
+  }
+
+  // 图谱一跳扩展：从前5个最强命中出发，沿关系边把关联记忆一并带出
+  const topEntries = Object.values(results).sort((a, b) => b.score - a.score).slice(0, 5);
+  for (const hit of topEntries) {
+    const srcType = hit.type === 'post' ? 'post' : 'chat';
+    const srcId = srcType === 'post' ? hit.id : hit.chunkId;
+    if (!srcId) continue;
+    const neighbors = queryAll(
+      `SELECT target_id AS nid, target_type AS ntype, weight FROM memory_edges WHERE source_id = ? AND source_type = ?
+       UNION SELECT source_id, source_type, weight FROM memory_edges WHERE target_id = ? AND target_type = ?
+       ORDER BY weight DESC LIMIT 3`,
+      [srcId, srcType, srcId, srcType]
+    );
+    for (const nb of neighbors) {
+      const nkey = `${nb.ntype}_${nb.nid}`;
+      if (results[nkey]) continue; // 已在结果里就不重复加
+      if (nb.ntype === 'post') {
+        const p = queryOne("SELECT id, content FROM memories WHERE id = ?", [nb.nid]);
+        if (p) results[nkey] = { id: p.id, type: 'post', content: p.content, vecScore: 0, bm25Score: 0, score: nb.weight * 0.5, viaGraph: true };
+      } else {
+        const c = queryOne("SELECT id, session_id, summary, chunk_text FROM chat_chunk_embeddings WHERE id = ?", [nb.nid]);
+        if (c) results[nkey] = { id: c.session_id, chunkId: c.id, type: 'chat', content: c.summary || c.chunk_text, vecScore: 0, bm25Score: 0, score: nb.weight * 0.5, viaGraph: true };
       }
     }
   }
