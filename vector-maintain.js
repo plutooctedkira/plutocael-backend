@@ -24,29 +24,35 @@ async function runMaintenance() {
   console.log('[vector-maintain] Database initialized');
 
   // 1. Embedding 新的对话 chunks
-  console.log('[vector-maintain] [1/4] Embedding chat chunks...');
+  console.log('[vector-maintain] [1/5] Embedding chat chunks...');
   await embedChatChunks(10);
   console.log('[vector-maintain] Chat chunks embedded');
 
-  // 2. 重建关系图谱
-  console.log('[vector-maintain] [2/4] Building memory edges...');
+  // 2. 给新 chunk 生成 LLM 摘要并用摘要重新 embed
+  console.log('[vector-maintain] [2/5] Summarizing new chunks...');
+  const { summarizeAndReembed } = require('./chunk-summarizer');
+  const sum = await summarizeAndReembed(20);
+  console.log(`[vector-maintain] Summarized ${sum.summarized}/${sum.total} chunks`);
+
+  // 3. 重建关系图谱
+  console.log('[vector-maintain] [3/5] Building memory edges...');
   buildMemoryEdges();
   console.log('[vector-maintain] Memory edges built');
 
-  // 3. 遗忘曲线清理
-  console.log('[vector-maintain] [3/4] Running forgetting curve cleanup...');
+  // 4. 遗忘曲线清理
+  console.log('[vector-maintain] [4/5] Running forgetting curve cleanup...');
   forgettingCurveCleanup();
   console.log('[vector-maintain] Forgetting curve cleanup done');
 
-  // 4. 记录完成
+  // 5. 记录完成
   const { queryOne } = require('./db');
   const stats = queryOne(`
-    SELECT 
+    SELECT
       (SELECT COUNT(*) FROM post_embeddings) as posts,
       (SELECT COUNT(*) FROM chat_chunk_embeddings) as chunks,
       (SELECT COUNT(*) FROM memory_edges) as edges
   `);
-  console.log(`[vector-maintain] [4/4] Done! Posts:${stats?.posts || 0} Chunks:${stats?.chunks || 0} Edges:${stats?.edges || 0}`);
+  console.log(`[vector-maintain] [5/5] Done! Posts:${stats?.posts || 0} Chunks:${stats?.chunks || 0} Edges:${stats?.edges || 0}`);
 }
 
 runMaintenance().catch(err => {

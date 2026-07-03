@@ -77,6 +77,9 @@ async function initDB() {
   // 迁移：messages 表的工具调用日志列
   try { db.run("ALTER TABLE messages ADD COLUMN tool_log TEXT DEFAULT NULL"); } catch (e) { /* 列已存在 */ }
 
+  // 迁移：messages 表的消息类型列（text/image）
+  try { db.run("ALTER TABLE messages ADD COLUMN msg_type TEXT DEFAULT 'text'"); } catch (e) { /* 列已存在 */ }
+
   // 留言板
   db.run(`
     CREATE TABLE IF NOT EXISTS board_messages (

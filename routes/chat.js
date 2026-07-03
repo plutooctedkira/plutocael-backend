@@ -43,7 +43,7 @@ const MAX_TOOL_ROUNDS = 5;
 // 消息压缩：当消息数超过阈值，用 Claude 总结旧消息
 async function compressOldMessages(session_id, threshold = 40, keepRecent = 20) {
   try {
-    const all = queryAll("SELECT id, role, content FROM messages WHERE session_id = ? AND visible = 1 ORDER BY id ASC", [session_id]);
+    const all = queryAll("SELECT id, role, content, msg_type FROM messages WHERE session_id = ? AND visible = 1 ORDER BY id ASC", [session_id]);
     if (all.length <= threshold) return;
 
     const recent = all.slice(-keepRecent);
@@ -58,7 +58,7 @@ async function compressOldMessages(session_id, threshold = 40, keepRecent = 20) 
     const oldMid = old.slice(midStart, recentStart);
     const oldEarly = old.slice(0, midStart);
 
-    const buildLayer = (msgs) => msgs.map(m => `[${m.role}]: ${m.content}`).join('\n');
+    const buildLayer = (msgs) => msgs.map(m => `[${m.role}]: ${m.msg_type === 'image' ? '[图片]' : m.content}`).join('\n');
     const layerText = `【近期对话-详细记录】\n${buildLayer(oldRecent)}\n\n【中期对话-概括】\n${buildLayer(oldMid)}\n\n【早期对话-极简记录】\n${buildLayer(oldEarly)}`;
 
     const compressPrompt = `请将以下分层对话历史压缩成摘要。
@@ -120,11 +120,21 @@ async function buildContext(session_id) {
   // 先尝试压缩旧消息
   await compressOldMessages(session_id);
 
-  // 取当前可见消息
+  // 取当前可见消息（图片消息转成 Claude vision 内容块）
   const history = queryAll(
-    "SELECT role, content FROM messages WHERE session_id = ? AND visible = 1 ORDER BY id DESC LIMIT ?",
+    "SELECT role, content, msg_type FROM messages WHERE session_id = ? AND visible = 1 ORDER BY id DESC LIMIT ?",
     [session_id, (settings.max_context_rounds || 10) * 2]
-  ).reverse();
+  ).reverse().map(m => {
+    if (m.msg_type === 'image') {
+      try {
+        const img = JSON.parse(m.content);
+        const blocks = [{ type: 'image', source: { type: 'base64', media_type: img.media_type, data: img.data } }];
+        if (img.text) blocks.push({ type: 'text', text: img.text });
+        return { role: m.role, content: blocks };
+      } catch (e) { return { role: m.role, content: '[图片]' }; }
+    }
+    return { role: m.role, content: m.content };
+  });
 
   // 如果有摘要，放在历史消息最前面
   const sess = queryOne("SELECT summary FROM sessions WHERE id = ?", [session_id]);
@@ -181,13 +191,23 @@ function buildRequestBody(settings, model, systemPrompt, messages, stream = fals
   return body;
 }
 
+// 保存用户消息（支持带图片）
+function saveUserMessage(session_id, content, image) {
+  if (image && image.data && image.media_type) {
+    run("INSERT INTO messages (session_id, role, content, msg_type) VALUES (?, 'user', ?, 'image')",
+      [session_id, JSON.stringify({ text: content || '', media_type: image.media_type, data: image.data })]);
+  } else {
+    run("INSERT INTO messages (session_id, role, content) VALUES (?, 'user', ?)", [session_id, content]);
+  }
+}
+
 // 非流式
 router.post('/', async (req, res) => {
   try {
-    const { session_id, content } = req.body;
-    if (!session_id || !content) return res.status(400).json({ error: '需要 session_id 和 content' });
+    const { session_id, content, image } = req.body;
+    if (!session_id || (!content && !image)) return res.status(400).json({ error: '需要 session_id 和 content' });
 
-    run("INSERT INTO messages (session_id, role, content) VALUES (?, 'user', ?)", [session_id, content]);
+    saveUserMessage(session_id, content, image);
 
     const { settings, history, systemPrompt, apiBaseUrl, apiKey, model } = await buildContext(session_id);
 
@@ -234,10 +254,10 @@ router.post('/', async (req, res) => {
 // 流式
 router.post('/stream', async (req, res) => {
   try {
-    const { session_id, content } = req.body;
-    if (!session_id || !content) return res.status(400).json({ error: '需要 session_id 和 content' });
+    const { session_id, content, image } = req.body;
+    if (!session_id || (!content && !image)) return res.status(400).json({ error: '需要 session_id 和 content' });
 
-    run("INSERT INTO messages (session_id, role, content) VALUES (?, 'user', ?)", [session_id, content]);
+    saveUserMessage(session_id, content, image);
 
     const { settings, history, systemPrompt, apiBaseUrl, apiKey, model } = await buildContext(session_id);
 

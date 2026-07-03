@@ -176,7 +176,7 @@ async function embedPost(postId, content) {
 async function embedChatChunks(chunkSize = 10) {
   const sessions = queryAll("SELECT DISTINCT session_id FROM messages WHERE visible = 1 ORDER BY session_id");
   for (const { session_id } of sessions) {
-    const msgs = queryAll("SELECT id, role, content FROM messages WHERE session_id = ? AND visible = 1 ORDER BY id", [session_id]);
+    const msgs = queryAll("SELECT id, role, content, msg_type FROM messages WHERE session_id = ? AND visible = 1 ORDER BY id", [session_id]);
     for (let i = 0; i < msgs.length; i += chunkSize) {
       const chunk = msgs.slice(i, i + chunkSize);
       if (chunk.length === 0) continue;
@@ -184,7 +184,7 @@ async function embedChatChunks(chunkSize = 10) {
       const msgIdEnd = chunk[chunk.length - 1].id;
       const exist = queryOne("SELECT id FROM chat_chunk_embeddings WHERE session_id = ? AND msg_id_start = ? AND msg_id_end = ?", [session_id, msgIdStart, msgIdEnd]);
       if (exist) continue;
-      const chunkText = chunk.map(m => `[${m.role}] ${m.content}`).join('\n').substring(0, 800);
+      const chunkText = chunk.map(m => `[${m.role}] ${m.msg_type === 'image' ? '[图片]' : m.content}`).join('\n').substring(0, 800);
       const vec = await encodeText(chunkText);
       run("INSERT INTO chat_chunk_embeddings (session_id, msg_id_start, msg_id_end, chunk_text, embedding) VALUES (?, ?, ?, ?, ?)", [session_id, msgIdStart, msgIdEnd, chunkText, vecToJson(vec)]);
     }
@@ -349,4 +349,4 @@ function buildMemoryEdges() {
   }
 }
 
-module.exports = { initVectorTables, encodeText, embedPost, embedChatChunks, hybridSearch, forgettingCurveCleanup, buildMemoryEdges };
+module.exports = { initVectorTables, encodeText, vecToJson, embedPost, embedChatChunks, hybridSearch, forgettingCurveCleanup, buildMemoryEdges };
