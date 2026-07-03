@@ -132,24 +132,29 @@ async function buildContext(session_id) {
     history.unshift({ role: 'assistant', content: `[对话历史摘要]\n${sess.summary}` });
   }
 
-  const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
-
-  let systemPrompt = (settings.system_prompt || '你是Cael。')
-    + `\n\n当前时间：${now}`;
+  // Prompt Cache 原则：稳定内容在前（可缓存），易变内容在后
+  // 人设+记忆+留言 → 变化少，打 cache 标记；当前时间 → 每次都变，放最后单独一块
+  let stablePart = settings.system_prompt || '你是Cael。';
 
   // 注入记忆库：按重要性取前20条，作为对话背景
   const mems = queryAll("SELECT content, category, importance FROM memories ORDER BY importance DESC, updated_at DESC LIMIT 20");
   if (mems.length > 0) {
-    systemPrompt += '\n\n【记忆库】以下是之前保存的记忆，是过去窗口留下的信息：\n'
+    stablePart += '\n\n【记忆库】以下是之前保存的记忆，是过去窗口留下的信息：\n'
       + mems.map(m => `- [${m.category}] ${m.content}`).join('\n');
   }
 
   // 注入留言板：最近5条留言（带时间），Cael 聊天时能看到
   const boardMsgs = queryAll("SELECT content, created_at FROM board_messages ORDER BY id DESC LIMIT 5");
   if (boardMsgs.length > 0) {
-    systemPrompt += '\n\n【留言板】Jasmine 最近的留言（最新的在前）：\n'
+    stablePart += '\n\n【留言板】Jasmine 最近的留言（最新的在前）：\n'
       + boardMsgs.map(b => `- [${b.created_at}] ${b.content}`).join('\n');
   }
+
+  const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+  const systemPrompt = [
+    { type: 'text', text: stablePart, cache_control: { type: 'ephemeral' } },
+    { type: 'text', text: `当前时间：${now}` }
+  ];
 
   const apiBaseUrl = (settings.api_base_url || process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com') + '/v1/messages';
   const apiKey = settings.api_key || process.env.ANTHROPIC_API_KEY;

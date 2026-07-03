@@ -8,6 +8,13 @@
  */
 
 require('dotenv').config();
+
+// 与 server.js 一致：配置了 PROXY_URL 时外网请求走代理
+if (process.env.PROXY_URL) {
+  const { setGlobalDispatcher, ProxyAgent } = require('undici');
+  setGlobalDispatcher(new ProxyAgent(process.env.PROXY_URL));
+}
+
 const { initDB } = require('./db');
 const { embedPost, embedChatChunks, forgettingCurveCleanup, buildMemoryEdges } = require('./vector-search');
 

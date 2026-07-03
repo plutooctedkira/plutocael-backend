@@ -1,4 +1,13 @@
 require('dotenv').config();
+
+// 可选网络代理：在 .env 配置 PROXY_URL 后，所有外网请求（Claude API/Voyage/MCP）都走代理
+// 例如 Clash: PROXY_URL=http://127.0.0.1:7890  V2RayN: PROXY_URL=http://127.0.0.1:10809
+if (process.env.PROXY_URL) {
+  const { setGlobalDispatcher, ProxyAgent } = require('undici');
+  setGlobalDispatcher(new ProxyAgent(process.env.PROXY_URL));
+  console.log('已启用网络代理:', process.env.PROXY_URL);
+}
+
 const express = require('express');
 const cors = require('cors');
 const { initDB } = require('./db');
