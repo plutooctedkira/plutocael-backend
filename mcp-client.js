@@ -1,10 +1,11 @@
 const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
-const { SSEClientTransport } = require('@modelcontextprotocol/sdk/client/sse.js');
+const { StreamableHTTPClientTransport } = require('@modelcontextprotocol/sdk/client/streamableHttp.js');
 
 const MCP_URL = process.env.MCP_URL || 'https://mcp.plutocael.icu/mcp';
 
 async function connectMCP() {
-  const transport = new SSEClientTransport(new URL(MCP_URL));
+  // MCP网关用的是StreamableHTTP传输（之前误用SSE协议导致永远连不上）
+  const transport = new StreamableHTTPClientTransport(new URL(MCP_URL));
   const client = new Client({ name: 'plutocael-backend', version: '1.0.0' });
   await client.connect(transport);
   return client;
