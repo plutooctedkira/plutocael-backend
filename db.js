@@ -77,6 +77,15 @@ async function initDB() {
   // 迁移：messages 表的工具调用日志列
   try { db.run("ALTER TABLE messages ADD COLUMN tool_log TEXT DEFAULT NULL"); } catch (e) { /* 列已存在 */ }
 
+  // 留言板
+  db.run(`
+    CREATE TABLE IF NOT EXISTS board_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      content TEXT NOT NULL,
+      created_at DATETIME DEFAULT (datetime('now', '+8 hours'))
+    )
+  `);
+
   // 初始化向量搜索表
   try {
     const { initVectorTables } = require('./vector-search');
