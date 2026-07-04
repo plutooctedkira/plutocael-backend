@@ -243,6 +243,21 @@ router.post('/', async (req, res) => {
       messages.push({ role: 'user', content: toolResults });
     }
 
+    // 兜底：一直调工具没吐正文 → 不带工具强制再答一次
+    if (!reply.trim()) {
+      try {
+        const apiRes2 = await fetch(apiBaseUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+          body: JSON.stringify(buildRequestBody(settings, model, systemPrompt, messages, false, null))
+        });
+        if (apiRes2.ok) {
+          const d2 = await apiRes2.json();
+          reply += (d2.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
+        }
+      } catch (e) { console.warn('兜底回复失败:', e.message); }
+    }
+
     const toolLog = toolLogLines.length ? toolLogLines.join('\n') : null;
     run("INSERT INTO messages (session_id, role, content, reasoning_content, tool_log) VALUES (?, 'assistant', ?, ?, ?)", [session_id, reply, reasoning || null, toolLog]);
     run("UPDATE sessions SET updated_at = datetime('now', '+8 hours') WHERE id = ?", [session_id]);
@@ -358,6 +373,39 @@ router.post('/stream', async (req, res) => {
       messages.push({ role: 'assistant', content: assistantContent });
       const toolResults = await execToolUses(toolUses, toolLogLines, sse);
       messages.push({ role: 'user', content: toolResults });
+    }
+
+    // 兜底：模型一直调工具没吐正文（绕到上限或末轮仍在调工具）→ 强制不带工具再答一次，杜绝空回复
+    if (!fullReply.trim()) {
+      try {
+        const apiRes2 = await fetch(apiBaseUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+          body: JSON.stringify(buildRequestBody(settings, model, systemPrompt, messages, true, null))
+        });
+        if (apiRes2.ok) {
+          const reader2 = apiRes2.body.getReader();
+          const decoder2 = new TextDecoder();
+          let buf2 = '';
+          while (true) {
+            const { done, value } = await reader2.read();
+            if (done) break;
+            buf2 += decoder2.decode(value, { stream: true });
+            const lines2 = buf2.split('\n');
+            buf2 = lines2.pop();
+            for (const line of lines2) {
+              if (!line.startsWith('data: ')) continue;
+              try {
+                const ev = JSON.parse(line.slice(6).trim());
+                if (ev.type === 'content_block_delta' && ev.delta?.type === 'text_delta') {
+                  fullReply += ev.delta.text;
+                  sse({ type: 'text', text: ev.delta.text });
+                }
+              } catch (e) {}
+            }
+          }
+        }
+      } catch (e) { console.warn('兜底回复失败:', e.message); }
     }
 
     sse({ type: 'done' });
