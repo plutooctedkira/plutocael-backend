@@ -1,19 +1,9 @@
-const { queryAll, queryOne, run } = require('./db');
+const { queryAll, run, getBackgroundApiConfig } = require('./db');
 const { encodeText, vecToJson } = require('./vector-search');
 
-// 读取 API 配置（settings 优先，env 兜底），摘要用便宜的 sonnet
-function getApiConfig() {
-  const settings = queryOne("SELECT api_base_url, api_key FROM settings LIMIT 1") || {};
-  return {
-    url: ((settings.api_base_url || process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com')) + '/v1/messages',
-    key: settings.api_key || process.env.ANTHROPIC_API_KEY,
-    model: process.env.SUMMARY_MODEL || 'claude-sonnet-4-6'
-  };
-}
-
-// 调 LLM 给一段对话生成一句话摘要
+// 调 LLM 给一段对话生成一句话摘要（用便宜渠道，省主力额度）
 async function summarizeChunk(chunkText) {
-  const { url, key, model } = getApiConfig();
+  const { url, key, model } = getBackgroundApiConfig();
   if (!key) return null;
   try {
     const resp = await fetch(url, {

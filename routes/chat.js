@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { queryAll, queryOne, run } = require('../db');
+const { queryAll, queryOne, run, getBackgroundApiConfig } = require('../db');
 const { logUsage } = require('../gateway-tracker');
 const { listTools, callTool } = require('../mcp-client');
 
@@ -75,16 +75,16 @@ ${layerText}
 4. 禁止用"讨论了""聊到了"这种空话替代具体内容`;
 
     const settings = queryOne("SELECT * FROM settings LIMIT 1");
-    const apiBaseUrl = ((settings && settings.api_base_url) || process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com') + '/v1/messages';
-    const apiKey = (settings && settings.api_key) || process.env.ANTHROPIC_API_KEY;
-    const compressModels = ['claude-opus-4-6', 'claude-sonnet-4-6'];
+    // 压缩用便宜渠道，省主力额度（cheap_* 未配则回退主力）
+    const bg = getBackgroundApiConfig();
+    const compressModels = bg.model ? [bg.model, 'claude-sonnet-4-6'] : ['claude-opus-4-6', 'claude-sonnet-4-6'];
 
     let summary = null;
     for (const model of compressModels) {
       try {
-        const resp = await fetch(apiBaseUrl, {
+        const resp = await fetch(bg.url, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+          headers: { 'Content-Type': 'application/json', 'x-api-key': bg.key, 'anthropic-version': '2023-06-01' },
           body: JSON.stringify({
             model,
             max_tokens: 2000,

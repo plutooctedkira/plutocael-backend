@@ -70,7 +70,9 @@ async function initDB() {
   } catch (e) { /* 列已存在 */ }
 
   // 迁移：settings 表的 API 配置列（chat.js 依赖这三列，新库需要补上）
-  for (const col of ['api_base_url TEXT', 'api_key TEXT', 'model TEXT', 'enable_thinking INTEGER DEFAULT 0', 'enable_mcp INTEGER DEFAULT 1']) {
+  // cheap_* 是便宜渠道：摘要压缩等后台任务用，省主力额度，不填则回退用主力
+  for (const col of ['api_base_url TEXT', 'api_key TEXT', 'model TEXT', 'enable_thinking INTEGER DEFAULT 0', 'enable_mcp INTEGER DEFAULT 1',
+    'cheap_api_base_url TEXT', 'cheap_api_key TEXT', 'cheap_model TEXT']) {
     try { db.run(`ALTER TABLE settings ADD COLUMN ${col}`); } catch (e) { /* 列已存在 */ }
   }
 
@@ -197,4 +199,13 @@ function lastInsertId() {
   return _lastInsertId;
 }
 
-module.exports = { initDB, getDB, save, queryAll, queryOne, run, lastInsertId };
+// 后台任务（摘要/压缩）的 API 配置：便宜渠道优先，回退主力，再回退 env
+function getBackgroundApiConfig() {
+  const s = queryOne("SELECT api_base_url, api_key, cheap_api_base_url, cheap_api_key, cheap_model FROM settings LIMIT 1") || {};
+  const base = s.cheap_api_base_url || s.api_base_url || process.env.CHEAP_BASE_URL || process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com';
+  const key = s.cheap_api_key || s.api_key || process.env.CHEAP_API_KEY || process.env.ANTHROPIC_API_KEY;
+  const model = s.cheap_model || process.env.CHEAP_MODEL || process.env.SUMMARY_MODEL || 'claude-sonnet-4-6';
+  return { url: base.replace(/\/v1\/messages\/?$/, '') + '/v1/messages', key, model };
+}
+
+module.exports = { initDB, getDB, save, queryAll, queryOne, run, lastInsertId, getBackgroundApiConfig };
