@@ -45,6 +45,41 @@ router.get('/memories', async (req, res) => {
   }
 });
 
+// 新建 MCP 记忆
+router.post('/memories', async (req, res) => {
+  try {
+    const { title, content, importance, author, layer } = req.body;
+    if (!content) return res.status(400).json({ error: '需要 content' });
+    const r = await callTool('memory_create', {
+      title: title || content.slice(0, 20), content,
+      importance: importance || 3, author: author || 'Jasmine', layer: layer || 'episodic'
+    });
+    res.json(r);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// 更新 MCP 记忆
+router.put('/memories/:id', async (req, res) => {
+  try {
+    const { title, content, importance, layer } = req.body;
+    const args = { id: parseInt(req.params.id) };
+    if (title !== undefined) args.title = title;
+    if (content !== undefined) args.content = content;
+    if (importance !== undefined) args.importance = importance;
+    if (layer !== undefined) args.layer = layer;
+    const r = await callTool('memory_update', args);
+    res.json(r);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// 删除 MCP 记忆
+router.delete('/memories/:id', async (req, res) => {
+  try {
+    const r = await callTool('memory_delete', { id: parseInt(req.params.id) });
+    res.json(r);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // 搜索 MCP 记忆
 router.get('/search', async (req, res) => {
   try {

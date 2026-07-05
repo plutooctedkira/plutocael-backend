@@ -61,10 +61,12 @@ async function fetchMemories(limit = 20) {
         const parsed = JSON.parse(textBlock.text);
         if (parsed.success && parsed.data && parsed.data.data) {
           return parsed.data.data.map(item => ({
+            id: item.memory.id,
             title: item.memory.title,
             content: item.memory.content,
             layer: item.memory.layer,
-            importance: item.memory.importance
+            importance: item.memory.importance,
+            created_at: item.memory.created_at
           }));
         }
       }
