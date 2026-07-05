@@ -66,7 +66,9 @@ async function fetchMemories(limit = 20) {
             content: item.memory.content,
             layer: item.memory.layer,
             importance: item.memory.importance,
-            created_at: item.memory.created_at
+            author: item.memory.author,
+            created_at: item.memory.created_at,
+            last_accessed: item.memory.last_accessed
           }));
         }
       }

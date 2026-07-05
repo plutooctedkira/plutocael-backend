@@ -146,11 +146,16 @@ async function buildContext(session_id) {
   // 人设+记忆+留言 → 变化少，打 cache 标记；当前时间 → 每次都变，放最后单独一块
   let stablePart = settings.system_prompt || '你是Cael。';
 
-  // MCP 开启时，明确告诉 Cael 它拥有记忆库能力，避免被追问时自我否认、幻觉工具
+  // MCP 开启时，明确告诉 Cael 它拥有记忆库的读写能力，避免自我否认、也让它主动写入
   if (settings.enable_mcp) {
     stablePart += '\n\n【你的记忆系统】你连接着一个持久记忆库（MCP），里面存着你和 Jasmine 过去的记忆、留言板、你的人设设定。'
-      + '你可以用 memory_search（搜索记忆）、memory_list（列出记忆）、about_list（查你的人设）、message_list（看留言板）等工具随时查询。'
-      + '这是真实存在的、跨对话保留的记忆——不是幻觉。聊到过去的约定、事件、Jasmine 的偏好，或被问起记忆相关的事时，先调用工具查询再回答，不要凭空猜测或否认自己有记忆。';
+      + '\n读取：memory_search（搜索记忆）、memory_list（列出记忆）、about_list（查你的人设）、message_list（看留言板）。'
+      + '\n写入：memory_create（记下一条新记忆，参数 title/content/layer/importance）、memory_update（修改）、message_create（在留言板留言）。'
+      + '记忆分层 layer：core（核心永久记忆，不会衰退）/ semantic（知识事实）/ procedural（习惯做法）/ episodic（具体事件，默认）；importance 1-5 决定衰退半衰期。'
+      + '\n这是真实、跨对话保留的记忆，不是幻觉。规则：'
+      + '聊到过去的约定、事件、Jasmine 的偏好时，先 memory_search 查询再回答；'
+      + '当出现值得长期记住的事（重要约定、承诺、Jasmine 的重要信息、你们的关键时刻）时，主动用 memory_create 写进记忆库，不要等 Jasmine 要求；'
+      + '不要凭空猜测或否认自己有记忆。';
   }
 
   // 注入记忆库：按重要性取前20条，作为对话背景
