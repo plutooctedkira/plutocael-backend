@@ -107,4 +107,51 @@ router.get('/list', (req, res) => {
   }
 });
 
+// ===== MCP 配置管理 =====
+
+// 列出所有 MCP 配置
+router.get('/config', (req, res) => {
+  try {
+    const configPath = path.join(__dirname, '..', 'mcp_config.json');
+    const raw = fs.readFileSync(configPath, 'utf-8');
+    res.json({ ok: true, data: JSON.parse(raw) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// 添加 MCP 服务器
+router.post('/config', (req, res) => {
+  try {
+    const { name, url, command, args, env } = req.body;
+    if (!name) return res.status(400).json({ error: '需要 name' });
+    const list = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'mcp_config.json'), 'utf-8'));
+    const item = { id: Date.now(), name, url: url || '', command: command || '', args: args || '', env: env || '', enabled: true, status: 'deployed', deployedAt: new Date().toLocaleString('zh-CN'), tools: [] };
+    list.push(item);
+    fs.writeFileSync(path.join(__dirname, '..', 'mcp_config.json'), JSON.stringify(list, null, 2), 'utf-8');
+    res.json({ ok: true, data: item });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// 更新配置（含启用/停用开关）
+router.put('/config/:id', (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const list = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'mcp_config.json'), 'utf-8'));
+    const idx = list.findIndex(c => c.id === id);
+    if (idx === -1) return res.status(404).json({ error: '未找到' });
+    ['name', 'url', 'command', 'args', 'env', 'enabled', 'status'].forEach(k => { if (req.body[k] !== undefined) list[idx][k] = req.body[k]; });
+    fs.writeFileSync(path.join(__dirname, '..', 'mcp_config.json'), JSON.stringify(list, null, 2), 'utf-8');
+    res.json({ ok: true, data: list[idx] });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// 删除配置
+router.delete('/config/:id', (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const list = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'mcp_config.json'), 'utf-8')).filter(c => c.id !== id);
+    fs.writeFileSync(path.join(__dirname, '..', 'mcp_config.json'), JSON.stringify(list, null, 2), 'utf-8');
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 module.exports = router;
