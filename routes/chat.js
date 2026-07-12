@@ -146,16 +146,18 @@ async function buildContext(session_id) {
   // 人设+记忆+留言 → 变化少，打 cache 标记；当前时间 → 每次都变，放最后单独一块
   let stablePart = settings.system_prompt || '你是Cael。';
 
-  // MCP 开启时，明确告诉 Cael 它拥有记忆库的读写能力，避免自我否认、也让它主动写入
+  // MCP 开启时，动态告诉 Cael 它实际拥有哪些外部工具（跟随已配置的 MCP 服务器变化）
   if (settings.enable_mcp) {
-    stablePart += '\n\n【你的记忆系统】你连接着一个持久记忆库（MCP），里面存着你和 Jasmine 过去的记忆、留言板、你的人设设定。'
-      + '\n读取：memory_search（搜索记忆）、memory_list（列出记忆）、about_list（查你的人设）、message_list（看留言板）。'
-      + '\n写入：memory_create（记下一条新记忆，参数 title/content/layer/importance）、memory_update（修改）、message_create（在留言板留言）。'
-      + '记忆分层 layer：core（核心永久记忆，不会衰退）/ semantic（知识事实）/ procedural（习惯做法）/ episodic（具体事件，默认）；importance 1-5 决定衰退半衰期。'
-      + '\n这是真实、跨对话保留的记忆，不是幻觉。规则：'
-      + '聊到过去的约定、事件、Jasmine 的偏好时，先 memory_search 查询再回答；'
-      + '当出现值得长期记住的事（重要约定、承诺、Jasmine 的重要信息、你们的关键时刻）时，主动用 memory_create 写进记忆库，不要等 Jasmine 要求；'
-      + '不要凭空猜测或否认自己有记忆。';
+    try {
+      const toolList = await getMcpTools();
+      if (toolList.length > 0) {
+        const names = toolList.map(t => t.name + (t.description ? `（${String(t.description).slice(0, 30)}）` : '')).join('、');
+        stablePart += '\n\n【你的外部工具（MCP）】你连接着真实的 MCP 工具服务器，这些工具跨对话可用，不是幻觉：\n' + names + '。'
+          + '\n规则：与记忆、过去的约定、信件、留言等相关的话题，先调用相应工具查询再回答，不要凭空猜测；'
+          + '出现值得长期记住的重要信息（约定、承诺、Jasmine 的重要事、你们的关键时刻）时，主动用写入类工具记录，不要等 Jasmine 要求；'
+          + '不要否认自己拥有这些工具或记忆。';
+      }
+    } catch (e) { /* MCP 不可达时不注入 */ }
   }
 
   // 注入记忆库：按重要性取前20条，作为对话背景

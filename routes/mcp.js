@@ -2,11 +2,84 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const router = express.Router();
-const { listTools, callTool, fetchMemories, searchMemories, MCP_URL } = require('../mcp-client');
+const { getServers, listTools, callTool, testServer, invalidateCache, fetchMemories, searchMemories } = require('../mcp-client');
+const { queryAll, queryOne, run, lastInsertId } = require('../db');
 
-// 获取 MCP 服务器状态
+// 获取 MCP 状态概览
 router.get('/status', (req, res) => {
-  res.json({ ok: true, url: MCP_URL });
+  try {
+    const servers = queryAll("SELECT * FROM mcp_servers ORDER BY id");
+    res.json({ ok: true, total: servers.length, enabled: servers.filter(s => s.enabled).length });
+  } catch (err) { res.json({ ok: true, total: 0, enabled: 0 }); }
+});
+
+// ===== MCP 服务器管理 =====
+// 列出所有服务器
+router.get('/servers', (req, res) => {
+  try {
+    const data = queryAll("SELECT * FROM mcp_servers ORDER BY id");
+    res.json({ ok: true, data });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// 添加服务器
+router.post('/servers', (req, res) => {
+  try {
+    const { name, url } = req.body;
+    if (!name || !url) return res.status(400).json({ error: '需要 name 和 url' });
+    try { new URL(url); } catch (e) { return res.status(400).json({ error: 'URL 格式不对' }); }
+    run("INSERT INTO mcp_servers (name, url) VALUES (?, ?)", [name.trim(), url.trim()]);
+    invalidateCache();
+    const server = queryOne("SELECT * FROM mcp_servers WHERE id = ?", [lastInsertId()]);
+    res.json({ ok: true, data: server });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// 更新服务器（改名/改地址/启停）
+router.put('/servers/:id', (req, res) => {
+  try {
+    const { name, url, enabled } = req.body;
+    const sets = []; const vals = [];
+    if (name !== undefined) { sets.push('name = ?'); vals.push(name); }
+    if (url !== undefined) { sets.push('url = ?'); vals.push(url); }
+    if (enabled !== undefined) { sets.push('enabled = ?'); vals.push(enabled ? 1 : 0); }
+    if (sets.length > 0) {
+      vals.push(req.params.id);
+      run(`UPDATE mcp_servers SET ${sets.join(', ')} WHERE id = ?`, vals);
+      invalidateCache();
+    }
+    const server = queryOne("SELECT * FROM mcp_servers WHERE id = ?", [req.params.id]);
+    res.json({ ok: true, data: server });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// 删除服务器
+router.delete('/servers/:id', (req, res) => {
+  try {
+    run("DELETE FROM mcp_servers WHERE id = ?", [req.params.id]);
+    invalidateCache();
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// 测试服务器连接（返回工具列表或错误原因）
+router.post('/servers/:id/test', async (req, res) => {
+  try {
+    const server = queryOne("SELECT * FROM mcp_servers WHERE id = ?", [req.params.id]);
+    if (!server) return res.status(404).json({ ok: false, error: '服务器不存在' });
+    const r = await testServer(server.url);
+    res.json(r);
+  } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
+});
+
+// 测试任意URL（添加前预检）
+router.post('/servers/test', async (req, res) => {
+  try {
+    const { url } = req.body;
+    if (!url) return res.status(400).json({ ok: false, error: '需要 url' });
+    const r = await testServer(url);
+    res.json(r);
+  } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
 });
 
 // 列出所有可用工具

@@ -91,6 +91,22 @@ async function initDB() {
     )
   `);
 
+  // MCP 服务器列表（可在前端增删启停，聊天聚合所有启用服务器的工具）
+  db.run(`
+    CREATE TABLE IF NOT EXISTS mcp_servers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      url TEXT NOT NULL,
+      enabled INTEGER DEFAULT 1,
+      created_at DATETIME DEFAULT (datetime('now', '+8 hours'))
+    )
+  `);
+  // 种子：把环境变量里的内置记忆服务器登记为第一个（用户可自行禁用/删除）
+  const mcpCount = db.exec("SELECT COUNT(*) FROM mcp_servers")[0].values[0][0];
+  if (mcpCount === 0 && process.env.MCP_URL) {
+    db.run("INSERT INTO mcp_servers (name, url) VALUES (?, ?)", ['内置记忆库', process.env.MCP_URL]);
+  }
+
   // 初始化向量搜索表
   try {
     const { initVectorTables } = require('./vector-search');
