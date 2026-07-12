@@ -167,13 +167,6 @@ async function buildContext(session_id) {
       + mems.map(m => `- [${m.category}] ${m.content}`).join('\n');
   }
 
-  // 注入留言板：最近5条留言（带时间），Cael 聊天时能看到
-  const boardMsgs = queryAll("SELECT content, created_at FROM board_messages ORDER BY id DESC LIMIT 5");
-  if (boardMsgs.length > 0) {
-    stablePart += '\n\n【留言板】Jasmine 最近的留言（最新的在前）：\n'
-      + boardMsgs.map(b => `- [${b.created_at}] ${b.content}`).join('\n');
-  }
-
   const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
   const systemPrompt = [
     { type: 'text', text: stablePart, cache_control: { type: 'ephemeral' } },
