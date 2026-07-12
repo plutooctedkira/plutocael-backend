@@ -17,7 +17,7 @@ router.put('/:id', (req, res) => {
     const allowed = ['system_prompt', 'temperature', 'max_context_rounds',
       'max_context_tokens', 'compress_threshold', 'compress_keep_rounds', 'max_reply_tokens',
       'api_base_url', 'api_key', 'model', 'enable_thinking', 'enable_mcp',
-      'cheap_api_base_url', 'cheap_api_key', 'cheap_model'];
+      'cheap_api_base_url', 'cheap_api_key', 'cheap_model', 'appearance', 'wallpaper'];
     const updates = [];
     const values = [];
     for (const key of allowed) {

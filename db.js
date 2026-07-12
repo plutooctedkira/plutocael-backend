@@ -72,7 +72,8 @@ async function initDB() {
   // 迁移：settings 表的 API 配置列（chat.js 依赖这三列，新库需要补上）
   // cheap_* 是便宜渠道：摘要压缩等后台任务用，省主力额度，不填则回退用主力
   for (const col of ['api_base_url TEXT', 'api_key TEXT', 'model TEXT', 'enable_thinking INTEGER DEFAULT 0', 'enable_mcp INTEGER DEFAULT 1',
-    'cheap_api_base_url TEXT', 'cheap_api_key TEXT', 'cheap_model TEXT']) {
+    'cheap_api_base_url TEXT', 'cheap_api_key TEXT', 'cheap_model TEXT',
+    'appearance TEXT', 'wallpaper TEXT']) {
     try { db.run(`ALTER TABLE settings ADD COLUMN ${col}`); } catch (e) { /* 列已存在 */ }
   }
 
