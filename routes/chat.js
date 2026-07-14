@@ -173,8 +173,14 @@ async function buildContext(session_id) {
     { type: 'text', text: `当前时间：${now}` }
   ];
 
-  const apiBaseUrl = (settings.api_base_url || process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com') + '/v1/messages';
-  const apiKey = settings.api_key || process.env.ANTHROPIC_API_KEY;
+  // 防手滑：API Key/地址 只能是 ASCII（HTTP 头不允许中文），混入非法字符就当没填、回退 env
+  const validHeader = (v) => v && /^[\x21-\x7E]+$/.test(v.trim()) ? v.trim() : null;
+  const settingsKey = validHeader(settings.api_key);
+  if (settings.api_key && !settingsKey) console.warn('settings.api_key 含非法字符(可能误填了模型名),已忽略并回退环境变量');
+  const settingsBase = validHeader(settings.api_base_url);
+
+  const apiBaseUrl = (settingsBase || process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com') + '/v1/messages';
+  const apiKey = settingsKey || process.env.ANTHROPIC_API_KEY;
   const model = settings.model || process.env.CLAUDE_MODEL || 'claude-sonnet-4-6';
 
   return { settings, history, systemPrompt, apiBaseUrl, apiKey, model };
