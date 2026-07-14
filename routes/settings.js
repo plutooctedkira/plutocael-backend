@@ -36,4 +36,32 @@ router.put('/:id', (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// 测试当前API配置：用保存的settings(env回退)发一个极小请求，返回真实连通结果
+router.post('/test-api', async (req, res) => {
+  try {
+    const s = queryOne("SELECT * FROM settings LIMIT 1") || {};
+    const valid = v => (v && /^[\x21-\x7E]+$/.test(v.trim())) ? v.trim() : null;
+    const warn = [];
+    if (s.api_key && !valid(s.api_key)) warn.push('API Key 含中文或非法字符（你可能贴错了内容），已忽略、用服务器默认');
+    if (s.api_base_url && !valid(s.api_base_url)) warn.push('API 地址含非法字符，已忽略');
+    const base = valid(s.api_base_url) || process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com';
+    const key = valid(s.api_key) || process.env.ANTHROPIC_API_KEY;
+    const model = (s.model || process.env.CLAUDE_MODEL || 'claude-sonnet-4-6').trim();
+    const r = await fetch(base.replace(/\/v1\/messages\/?$/, '') + '/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({ model, max_tokens: 5, messages: [{ role: 'user', content: 'hi' }] })
+    });
+    const text = await r.text();
+    if (!r.ok) {
+      let msg = text.slice(0, 300);
+      try { const j = JSON.parse(text); msg = (j.error && (j.error.message || j.error.code)) || msg; } catch (e) {}
+      return res.json({ ok: false, status: r.status, model, error: msg, warnings: warn });
+    }
+    res.json({ ok: true, model, warnings: warn });
+  } catch (err) {
+    res.json({ ok: false, error: err.message });
+  }
+});
+
 module.exports = router;
