@@ -67,20 +67,29 @@ router.get('/buckets/:id', async (req, res) => {
   } catch (error) { sendError(res, error); }
 });
 
-// 管理：修改单条记忆（钉选/已解决/重要度），白名单透传给 OB
+// 管理：修改单条记忆的钉选/已解决状态
+// OB(v2.4.x) 的 /pin 和 /resolve 是开关式端点(每POST翻转一次)，
+// 所以这里先查当前状态、只在与目标不一致时才翻转，保证同一请求重发也不会翻错
 router.patch('/buckets/:id', async (req, res) => {
-  const fields = {};
-  for (const k of ['pinned', 'resolved', 'importance']) {
-    if (req.body[k] !== undefined) fields[k] = req.body[k];
+  const want = {};
+  for (const k of ['pinned', 'resolved']) {
+    if (req.body[k] !== undefined) want[k] = Boolean(req.body[k]);
   }
-  if (Object.keys(fields).length === 0) {
+  if (Object.keys(want).length === 0) {
     return res.status(400).json({ error: 'no_fields', message: '没有可修改的字段' });
   }
   try {
-    const data = await dashboardRequest(`/api/bucket/${encodeURIComponent(req.params.id)}`, {
-      method: 'PATCH', data: fields,
-    });
-    res.json(normalizeBucket(data.bucket || data));
+    const id = encodeURIComponent(req.params.id);
+    const before = await dashboardRequest(`/api/bucket/${id}`);
+    const cur = normalizeBucket(before.bucket || before);
+    if (want.pinned !== undefined && cur.pinned !== want.pinned) {
+      await dashboardRequest(`/api/bucket/${id}/pin`, { method: 'POST', data: {} });
+    }
+    if (want.resolved !== undefined && cur.resolved !== want.resolved) {
+      await dashboardRequest(`/api/bucket/${id}/resolve`, { method: 'POST', data: {} });
+    }
+    const after = await dashboardRequest(`/api/bucket/${id}`);
+    res.json(normalizeBucket(after.bucket || after));
   } catch (error) { sendError(res, error); }
 });
 
