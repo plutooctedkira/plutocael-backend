@@ -67,6 +67,23 @@ router.get('/buckets/:id', async (req, res) => {
   } catch (error) { sendError(res, error); }
 });
 
+// 管理：修改单条记忆（钉选/已解决/重要度），白名单透传给 OB
+router.patch('/buckets/:id', async (req, res) => {
+  const fields = {};
+  for (const k of ['pinned', 'resolved', 'importance']) {
+    if (req.body[k] !== undefined) fields[k] = req.body[k];
+  }
+  if (Object.keys(fields).length === 0) {
+    return res.status(400).json({ error: 'no_fields', message: '没有可修改的字段' });
+  }
+  try {
+    const data = await dashboardRequest(`/api/bucket/${encodeURIComponent(req.params.id)}`, {
+      method: 'PATCH', data: fields,
+    });
+    res.json(normalizeBucket(data.bucket || data));
+  } catch (error) { sendError(res, error); }
+});
+
 // Breath Lab 调试：查询词的记忆检索打分明细
 router.get('/breath-debug', async (req, res) => {
   const params = new URLSearchParams();

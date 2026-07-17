@@ -93,7 +93,10 @@ async function dashboardRequest(path, options = {}, retried = false) {
     error.status = response.status;
     throw error;
   }
-  return response.json();
+  // PATCH 等写操作可能返回空 body，宽容解析
+  const text = await response.text();
+  if (!text) return {};
+  try { return JSON.parse(text); } catch (e) { return {}; }
 }
 
 // ── 数据整理：兼容 OB 不同版本的字段名，输出统一结构 ──
