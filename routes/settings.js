@@ -36,17 +36,27 @@ router.put('/:id', (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// 测试当前API配置：用保存的settings(env回退)发一个极小请求，返回真实连通结果
+// 测试API配置：body 可传 channel(main/cheap) 和输入框当前值，实测连通性(不落库)
+// 便宜渠道留空的字段按运行时同样的规则回退主力/env，测的就是实际会用到的配置
 router.post('/test-api', async (req, res) => {
   try {
     const s = queryOne("SELECT * FROM settings LIMIT 1") || {};
-    const valid = v => (v && /^[\x21-\x7E]+$/.test(v.trim())) ? v.trim() : null;
+    const body = req.body || {};
+    const channel = body.channel === 'cheap' ? 'cheap' : 'main';
+    const valid = v => (v && /^[\x21-\x7E]+$/.test(String(v).trim())) ? String(v).trim() : null;
     const warn = [];
-    if (s.api_key && !valid(s.api_key)) warn.push('API Key 含中文或非法字符（你可能贴错了内容），已忽略、用服务器默认');
-    if (s.api_base_url && !valid(s.api_base_url)) warn.push('API 地址含非法字符，已忽略');
-    const base = valid(s.api_base_url) || process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com';
-    const key = valid(s.api_key) || process.env.ANTHROPIC_API_KEY;
-    const model = (s.model || process.env.CLAUDE_MODEL || 'claude-sonnet-4-6').trim();
+    if (body.api_key && !valid(body.api_key)) warn.push('API Key 含中文或非法字符（你可能贴错了内容），已忽略、走回退');
+    if (body.api_base_url && !valid(body.api_base_url)) warn.push('API 地址含非法字符，已忽略');
+    let base, key, model;
+    if (channel === 'cheap') {
+      base = valid(body.api_base_url) || valid(s.cheap_api_base_url) || valid(s.api_base_url) || process.env.CHEAP_BASE_URL || process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com';
+      key = valid(body.api_key) || valid(s.cheap_api_key) || valid(s.api_key) || process.env.CHEAP_API_KEY || process.env.ANTHROPIC_API_KEY;
+      model = (body.model || s.cheap_model || process.env.CHEAP_MODEL || s.model || 'claude-sonnet-4-6').trim();
+    } else {
+      base = valid(body.api_base_url) || valid(s.api_base_url) || process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com';
+      key = valid(body.api_key) || valid(s.api_key) || process.env.ANTHROPIC_API_KEY;
+      model = (body.model || s.model || process.env.CLAUDE_MODEL || 'claude-sonnet-4-6').trim();
+    }
     const r = await fetch(base.replace(/\/v1\/messages\/?$/, '') + '/v1/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
