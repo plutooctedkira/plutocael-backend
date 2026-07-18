@@ -73,7 +73,7 @@ async function initDB() {
   // cheap_* 是便宜渠道：摘要压缩等后台任务用，省主力额度，不填则回退用主力
   for (const col of ['api_base_url TEXT', 'api_key TEXT', 'model TEXT', 'enable_thinking INTEGER DEFAULT 0', 'enable_mcp INTEGER DEFAULT 1',
     'cheap_api_base_url TEXT', 'cheap_api_key TEXT', 'cheap_model TEXT',
-    'appearance TEXT', 'wallpaper TEXT']) {
+    'appearance TEXT', 'wallpaper TEXT', 'avatar_user TEXT', 'avatar_ai TEXT']) {
     try { db.run(`ALTER TABLE settings ADD COLUMN ${col}`); } catch (e) { /* 列已存在 */ }
   }
 
