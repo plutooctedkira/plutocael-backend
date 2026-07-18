@@ -33,6 +33,7 @@ async function listTools(force = false) {
   const tools = [];
   const routes = {};
   const seen = new Set();
+  let failed = 0;
   for (const s of servers) {
     let client;
     try {
@@ -46,9 +47,16 @@ async function listTools(force = false) {
         routes[t.name] = s.url;
       }
     } catch (err) {
+      failed++;
       console.error(`MCP [${s.name}] listTools 失败:`, err.message);
       if (client) try { await client.close(); } catch (e) {}
     }
+  }
+  // 服务器打盹拉到空时沿用旧列表(10分钟宽限，不覆盖缓存所以下个请求会立刻重试)，
+  // 否则空列表会被缓存60秒——期间聊天请求全都没有工具可挂
+  if (tools.length === 0 && failed > 0 && cache.tools.length > 0 && Date.now() - cache.ts < 600000) {
+    console.warn(`MCP 全部服务器暂时不可达，沿用 ${cache.tools.length} 个旧工具定义`);
+    return cache.tools;
   }
   cache = { ts: Date.now(), tools, routes };
   return tools;
