@@ -1,28 +1,16 @@
 const { queryAll, run, getBackgroundApiConfig } = require('./db');
 const { encodeText, vecToJson } = require('./vector-search');
 
-// 调 LLM 给一段对话生成一句话摘要（用便宜渠道，省主力额度）
+// 调 LLM 给一段对话生成一句话摘要（用便宜渠道，省主力额度；bgLLM 自动兼容 Anthropic/OpenAI 格式）
 async function summarizeChunk(chunkText) {
-  const { url, key, model } = getBackgroundApiConfig();
-  if (!key) return null;
   try {
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({
-        model,
-        max_tokens: 200,
-        system: '你是一个对话摘要器。用一到两句中文概括这段对话。不超过80字。'
-          + '必须保留所有具体细节：日期、时间、地点、人名、数字。禁止抽象化。忽略sticker标记和纯语气词。',
-        messages: [{ role: 'user', content: `请概括这段对话：\n\n${chunkText.substring(0, 800)}` }]
-      })
+    const { bgComplete } = require('./services/bgLLM');
+    const text = await bgComplete({
+      system: '你是一个对话摘要器。用一到两句中文概括这段对话。不超过80字。'
+        + '必须保留所有具体细节：日期、时间、地点、人名、数字。禁止抽象化。忽略sticker标记和纯语气词。',
+      user: `请概括这段对话：\n\n${chunkText.substring(0, 800)}`,
+      maxTokens: 200,
     });
-    if (!resp.ok) {
-      console.warn('[chunk-summarizer] API错误', resp.status);
-      return null;
-    }
-    const data = await resp.json();
-    const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
     return text || null;
   } catch (e) {
     console.warn('[chunk-summarizer] 请求失败:', e.message);

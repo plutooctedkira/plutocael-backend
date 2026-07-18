@@ -52,6 +52,14 @@ router.post('/test-api', async (req, res) => {
       base = valid(body.api_base_url) || valid(s.cheap_api_base_url) || valid(s.api_base_url) || process.env.CHEAP_BASE_URL || process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com';
       key = valid(body.api_key) || valid(s.cheap_api_key) || valid(s.api_key) || process.env.CHEAP_API_KEY || process.env.ANTHROPIC_API_KEY;
       model = (body.model || s.cheap_model || process.env.CHEAP_MODEL || s.model || 'claude-sonnet-4-6').trim();
+      // 便宜渠道走后台任务同款的双格式调用(自动兼容 Anthropic/OpenAI 如 DeepSeek 官方)
+      try {
+        const { completeWith } = require('../services/bgLLM');
+        await completeWith({ url: base, key, model }, { system: 'test', user: 'hi', maxTokens: 5, timeoutMs: 15000 });
+        return res.json({ ok: true, model, channel, warnings: warn });
+      } catch (err) {
+        return res.json({ ok: false, status: err.status, model, channel, error: err.message, warnings: warn });
+      }
     } else {
       base = valid(body.api_base_url) || valid(s.api_base_url) || process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com';
       key = valid(body.api_key) || valid(s.api_key) || process.env.ANTHROPIC_API_KEY;
