@@ -218,10 +218,11 @@ function lastInsertId() {
 
 // 后台任务（摘要/压缩）的 API 配置：便宜渠道优先，回退主力，再回退 env
 function getBackgroundApiConfig() {
-  const s = queryOne("SELECT api_base_url, api_key, cheap_api_base_url, cheap_api_key, cheap_model FROM settings LIMIT 1") || {};
+  const s = queryOne("SELECT api_base_url, api_key, model, cheap_api_base_url, cheap_api_key, cheap_model FROM settings LIMIT 1") || {};
   const base = s.cheap_api_base_url || s.api_base_url || process.env.CHEAP_BASE_URL || process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com';
   const key = s.cheap_api_key || s.api_key || process.env.CHEAP_API_KEY || process.env.ANTHROPIC_API_KEY;
-  const model = s.cheap_model || process.env.CHEAP_MODEL || process.env.SUMMARY_MODEL || 'claude-sonnet-4-6';
+  // 便宜渠道没配模型时回退主力模型：第三方代理的模型名带渠道前缀，裸模型名会503
+  const model = s.cheap_model || process.env.CHEAP_MODEL || process.env.SUMMARY_MODEL || s.model || 'claude-sonnet-4-6';
   return { url: base.replace(/\/v1\/messages\/?$/, '') + '/v1/messages', key, model };
 }
 
