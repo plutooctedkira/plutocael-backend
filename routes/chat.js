@@ -276,6 +276,7 @@ router.post('/', async (req, res) => {
     const toolLog = toolLogLines.length ? toolLogLines.join('\n') : null;
     run("INSERT INTO messages (session_id, role, content, reasoning_content, tool_log) VALUES (?, 'assistant', ?, ?, ?)", [session_id, reply, reasoning || null, toolLog]);
     run("UPDATE sessions SET updated_at = datetime('now', '+8 hours') WHERE id = ?", [session_id]);
+    try { require('../services/autoMemory').autoMemorize(content, reply); } catch (e) { console.warn('autoMemory hook failed:', e.message); }
 
     res.json({ role: 'assistant', content: reply, reasoning_content: reasoning || null, tool_log: toolLog });
   } catch (err) { console.error('Chat error:', err); res.status(500).json({ error: err.message }); }
@@ -430,6 +431,7 @@ router.post('/stream', async (req, res) => {
         [session_id, fullReply, fullThinking || null, toolLogLines.length ? toolLogLines.join('\n') : null]);
       run("UPDATE sessions SET updated_at = datetime('now', '+8 hours') WHERE id = ?", [session_id]);
       try { logUsage(session_id, model, usage.output_tokens ? usage : null); } catch (e) { console.warn('logUsage failed:', e.message); }
+      try { require('../services/autoMemory').autoMemorize(content, fullReply); } catch (e) { console.warn('autoMemory hook failed:', e.message); }
     }
     res.end();
   } catch (err) {
