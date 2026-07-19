@@ -8,8 +8,9 @@ function logUsage(sessionId, model, usage) {
   const cacheRead = usage.cache_read_input_tokens || 0;
   const cacheWrite = usage.cache_creation_input_tokens || 0;
 
-  // 从 pricing_config 获取当前定价
+  // 从 pricing_config 获取定价：先精确匹配，再模糊匹配（渠道代理的模型名带前缀如 [脆卷-kiro-0.08]claude-opus-4-6）
   const pricing = queryOne("SELECT * FROM pricing_config WHERE model = ? AND is_current = 1", [model])
+    || queryOne("SELECT * FROM pricing_config WHERE ? LIKE '%' || model || '%' ORDER BY is_current DESC LIMIT 1", [model])
     || queryOne("SELECT * FROM pricing_config WHERE is_current = 1")
     || { input_price: 3.0, output_price: 15.0, cache_read_price: 0.3, cache_write_price: 3.75 };
 
@@ -62,4 +63,13 @@ function getCurrentPricing() {
   return queryAll("SELECT * FROM pricing_config WHERE is_current = 1 ORDER BY id");
 }
 
-module.exports = { logUsage, getStats, getCurrentPricing };
+// 最近的调用日志（含缓存命中明细）
+function getRecentLogs(limit = 50) {
+  return queryAll(`
+    SELECT id, session_id, model, input_tokens, output_tokens,
+      cache_read_tokens, cache_write_tokens, ROUND(cost_usd, 5) as cost_usd, created_at
+    FROM gateway_usage ORDER BY id DESC LIMIT ?
+  `, [Math.min(200, Math.max(1, Number(limit) || 50))]);
+}
+
+module.exports = { logUsage, getStats, getCurrentPricing, getRecentLogs };

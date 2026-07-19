@@ -1,6 +1,16 @@
 const express = require('express');
 const router = express.Router();
-const { getStats, getCurrentPricing } = require('../gateway-tracker');
+const { getStats, getCurrentPricing, getRecentLogs } = require('../gateway-tracker');
+
+// 最近调用日志
+router.get('/logs', (req, res) => {
+  try {
+    res.json({ logs: getRecentLogs(req.query.limit) });
+  } catch (err) {
+    console.error('Gateway logs error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // 获取用量统计
 router.get('/stats', (req, res) => {

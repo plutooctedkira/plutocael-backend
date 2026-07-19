@@ -190,11 +190,25 @@ async function buildContext(session_id) {
 
 // 组装请求体：开启 thinking 时用 adaptive 模式（此时不传 temperature，两者不兼容）
 function buildRequestBody(settings, model, systemPrompt, messages, stream = false, tools = null) {
+  const msgs = messages.map(m => ({ role: m.role, content: m.content }));
+  // Prompt caching 第二断点：挂在最后一条消息上，让整段对话历史前缀命中缓存，
+  // 多轮聊天时每轮只有新增内容按全价计费（system 稳定块已有第一断点）
+  if (msgs.length > 0) {
+    const last = msgs[msgs.length - 1];
+    if (typeof last.content === 'string' && last.content) {
+      last.content = [{ type: 'text', text: last.content, cache_control: { type: 'ephemeral' } }];
+    } else if (Array.isArray(last.content) && last.content.length > 0) {
+      const blocks = last.content.map(b => ({ ...b }));
+      const lb = blocks[blocks.length - 1];
+      if (['text', 'image', 'tool_result'].includes(lb.type)) lb.cache_control = { type: 'ephemeral' };
+      last.content = blocks;
+    }
+  }
   const body = {
     model,
     max_tokens: settings.max_reply_tokens || 2000,
     system: systemPrompt,
-    messages: messages.map(m => ({ role: m.role, content: m.content }))
+    messages: msgs
   };
   if (settings.enable_thinking) {
     body.thinking = { type: 'adaptive' };

@@ -25,7 +25,7 @@ async function callAnthropic(root, key, model, system, user, maxTokens, timeoutM
   const body = await resp.text();
   if (!resp.ok) return { ok: false, status: resp.status, body };
   const data = JSON.parse(body);
-  return { ok: true, text: (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim() };
+  return { ok: true, text: (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim(), usage: data.usage || null };
 }
 
 async function callOpenAI(root, key, model, system, user, maxTokens, timeoutMs) {
@@ -39,7 +39,14 @@ async function callOpenAI(root, key, model, system, user, maxTokens, timeoutMs) 
   if (!resp.ok) return { ok: false, status: resp.status, body };
   const data = JSON.parse(body);
   const msg = data.choices && data.choices[0] && data.choices[0].message;
-  return { ok: true, text: String((msg && msg.content) || '').trim() };
+  // OpenAI 格式的 usage 转成 Anthropic 风格，方便统一记账
+  const u = data.usage || {};
+  const usage = {
+    input_tokens: u.prompt_tokens || 0,
+    output_tokens: u.completion_tokens || 0,
+    cache_read_input_tokens: (u.prompt_tokens_details && u.prompt_tokens_details.cached_tokens) || u.prompt_cache_hit_tokens || 0,
+  };
+  return { ok: true, text: String((msg && msg.content) || '').trim(), usage };
 }
 
 // 用指定配置调一次（test-api 等需要临时配置的场景用）
@@ -57,7 +64,12 @@ async function completeWith(cfg, { system, user, maxTokens = 500, timeoutMs = 30
       const r = fmt === 'anthropic'
         ? await callAnthropic(root, key, model, system, user, maxTokens, timeoutMs)
         : await callOpenAI(root, key, model, system, user, maxTokens, timeoutMs);
-      if (r.ok) { formatCache.set(cacheKey, fmt); return r.text; }
+      if (r.ok) {
+        formatCache.set(cacheKey, fmt);
+        // 后台任务也记 token 账（session_id 固定为"后台任务"，用量页可区分）
+        try { require('../gateway-tracker').logUsage('后台任务', model, r.usage); } catch (e) {}
+        return r.text;
+      }
       let msg = r.body.slice(0, 300);
       try { const j = JSON.parse(r.body); msg = (j.error && (j.error.message || j.error.code)) || msg; } catch (e) {}
       lastErr = Object.assign(new Error(msg || `HTTP ${r.status}`), { status: r.status });
