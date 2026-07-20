@@ -3,7 +3,7 @@ const express = require('express');
 const router = express.Router();
 const fs = require('fs');
 const path = require('path');
-const { queryAll, run, lastInsertId, initDB } = require('../db');
+const { queryAll, queryOne, run, lastInsertId, initDB } = require('../db');
 
 const ROOT = path.join(__dirname, '..');
 const DB_PATH = path.join(ROOT, 'plutocael.db');
@@ -63,6 +63,89 @@ router.post('/import', (req, res) => {
     res.json({ ok: true, sessions: sCount, messages: mCount });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
+
+// ── 智能导入：任意 .md/.json 丢给 DeepSeek 后台清洗(去重/剔无效)后并入当前对话 ──
+const IMPORT_PROMPT = `你是聊天记录清洗器。下面是一段聊天记录原文（可能是 markdown 或任意格式）。任务：
+1. 识别对话双方：用户(Jasmine一方)标 role="user"，AI(Cael/助手一方)标 role="assistant"。
+2. 丢弃无效内容：系统提示、单独成行的时间戳、重复的消息、空白、纯符号、导出工具的页眉页脚。
+3. 消息原文保留，不要改写、不要总结、不要翻译。
+4. 某条消息带明确时间就输出 time 字段(YYYY-MM-DD HH:MM:SS)，没有就省略。
+只输出 JSON 数组，不要输出任何其它文字：
+[{"role":"user","content":"..."},{"role":"assistant","content":"...","time":"2026-07-01 12:00:00"}]
+若这段全是无效内容，输出 []`;
+
+let importJob = null; // {status, totalChunks, doneChunks, imported, skipped, error}
+
+router.post('/import-smart', (req, res) => {
+  try {
+    const body = req.body || {};
+    const text = String(body.content || '').slice(0, 2000000);
+    if (!text.trim()) return res.status(400).json({ error: '文件是空的' });
+    if (importJob && importJob.status === 'running') return res.status(409).json({ error: '已有导入任务在进行中，稍等一下' });
+
+    // 目标会话：优先用前端传来的，否则最新会话，再没有就建一个
+    let sid = Number(body.session_id) || 0;
+    if (!sid) {
+      const s = queryOne('SELECT id FROM sessions ORDER BY id DESC LIMIT 1');
+      if (s) sid = s.id;
+      else { run("INSERT INTO sessions (name) VALUES ('对话')"); sid = lastInsertId(); }
+    }
+
+    // 先试试是不是本应用导出的 json，是的话不用花 DeepSeek 的钱
+    let directMsgs = null;
+    try {
+      const j = JSON.parse(text);
+      if (Array.isArray(j.sessions)) {
+        directMsgs = j.sessions.flatMap(s => s.messages || [])
+          .filter(m => (m.msg_type || 'text') === 'text')
+          .map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: String(m.content || ''), created_at: m.created_at || null }));
+      }
+    } catch (e) { /* 不是json，走DS清洗 */ }
+
+    importJob = { status: 'running', totalChunks: 0, doneChunks: 0, imported: 0, skipped: 0, error: null };
+    res.json({ ok: true, started: true, session_id: sid });
+
+    setImmediate(async () => {
+      try {
+        const existing = new Set(queryAll('SELECT content FROM messages WHERE session_id = ?', [sid]).map(r => String(r.content).trim()));
+        const insert = (m) => {
+          const c = String(m.content || '').trim();
+          if (!c || existing.has(c)) { importJob.skipped++; return; }
+          existing.add(c);
+          run("INSERT INTO messages (session_id, role, content, created_at) VALUES (?,?,?, COALESCE(?, datetime('now','+8 hours')))",
+            [sid, m.role === 'assistant' ? 'assistant' : 'user', c, m.created_at || m.time || null]);
+          importJob.imported++;
+        };
+        if (directMsgs) {
+          importJob.totalChunks = 1;
+          for (const m of directMsgs) insert(m);
+          importJob.doneChunks = 1;
+        } else {
+          // 切块（约2600字符一块）逐块交给 DeepSeek 解析+清洗
+          const lines = text.split(/\r?\n/);
+          const chunks = []; let cur = []; let len = 0;
+          for (const l of lines) { cur.push(l); len += l.length + 1; if (len > 2600) { chunks.push(cur.join('\n')); cur = []; len = 0; } }
+          if (cur.length) chunks.push(cur.join('\n'));
+          importJob.totalChunks = chunks.length;
+          const { bgComplete } = require('../services/bgLLM');
+          for (const chunk of chunks) {
+            try {
+              const out = await bgComplete({ system: IMPORT_PROMPT, user: chunk, maxTokens: 4000, timeoutMs: 120000 });
+              const mm = out.match(/\[[\s\S]*\]/);
+              if (mm) for (const item of JSON.parse(mm[0])) insert(item);
+            } catch (e) { console.warn('[import-smart] 块处理失败:', e.message); }
+            importJob.doneChunks++;
+          }
+        }
+        run("UPDATE sessions SET updated_at = datetime('now','+8 hours') WHERE id = ?", [sid]);
+        importJob.status = 'done';
+        console.log(`[import-smart] 完成：导入${importJob.imported}条，跳过${importJob.skipped}条`);
+      } catch (e) { importJob.status = 'error'; importJob.error = e.message; }
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/import-status', (req, res) => { res.json(importJob || { status: 'idle' }); });
 
 // 备份：把整个 SQLite 库快照到 backups/
 router.post('/backup', (req, res) => {
