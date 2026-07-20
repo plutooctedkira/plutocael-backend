@@ -113,7 +113,7 @@ router.post('/import-smart', (req, res) => {
       }
     } catch (e) { /* 不是json，走DS清洗 */ }
 
-    importJob = { status: 'running', totalChunks: 0, doneChunks: 0, imported: 0, skipped: 0, error: null };
+    importJob = { status: 'running', totalChunks: 0, doneChunks: 0, imported: 0, skipped: 0, error: null, cancelRequested: false };
     res.json({ ok: true, started: true, session_id: sid });
 
     setImmediate(async () => {
@@ -141,6 +141,7 @@ router.post('/import-smart', (req, res) => {
           importJob.totalChunks = chunks.length;
           const { bgComplete } = require('../services/bgLLM');
           for (const chunk of chunks) {
+            if (importJob.cancelRequested) { importJob.status = 'cancelled'; console.log(`[import-smart] 已中断：导入${importJob.imported}条后停止`); return; }
             try {
               const out = await bgComplete({ system: IMPORT_PROMPT, user: chunk, maxTokens: 4000, timeoutMs: 120000 });
               const mm = out.match(/\[[\s\S]*\]/);
@@ -158,6 +159,12 @@ router.post('/import-smart', (req, res) => {
 });
 
 router.get('/import-status', (req, res) => { res.json(importJob || { status: 'idle' }); });
+
+// 中断正在进行的导入（当前块处理完就停，已导入的保留）
+router.post('/import-cancel', (req, res) => {
+  if (importJob && importJob.status === 'running') { importJob.cancelRequested = true; return res.json({ ok: true, cancelling: true }); }
+  res.json({ ok: true, cancelling: false });
+});
 
 // 备份：把整个 SQLite 库快照到 backups/
 router.post('/backup', (req, res) => {
