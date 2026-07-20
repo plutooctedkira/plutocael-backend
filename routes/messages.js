@@ -2,6 +2,28 @@ const express = require('express');
 const router = express.Router();
 const { queryAll, run } = require('../db');
 
+// 全局搜索聊天记录：?q=关键词 &type=image|link &date=YYYY-MM-DD（三者至少一个）
+router.get('/search/all', (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim();
+    const type = String(req.query.type || '');
+    const date = String(req.query.date || '').trim();
+    const where = ['m.visible = 1'];
+    const params = [];
+    if (q) { where.push('m.content LIKE ?'); params.push('%' + q + '%'); }
+    if (type === 'image') where.push("m.msg_type = 'image'");
+    if (type === 'link') where.push("(m.content LIKE '%http://%' OR m.content LIKE '%https://%')");
+    if (date) { where.push('date(m.created_at) = ?'); params.push(date); }
+    if (!q && !type && !date) return res.json({ items: [] });
+    const items = queryAll(`
+      SELECT m.id, m.session_id, m.role, m.msg_type, substr(m.content, 1, 140) as snippet, m.created_at, s.name as session_name
+      FROM messages m LEFT JOIN sessions s ON s.id = m.session_id
+      WHERE ${where.join(' AND ')} ORDER BY m.id DESC LIMIT 100
+    `, params);
+    res.json({ items });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // 获取某个会话的所有消息
 router.get('/session/:sessionId', (req, res) => {
   try {

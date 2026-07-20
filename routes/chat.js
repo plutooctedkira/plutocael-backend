@@ -121,19 +121,40 @@ async function buildContext(session_id) {
   await compressOldMessages(session_id);
 
   // 取当前可见消息（图片消息转成 Claude vision 内容块）
-  const history = queryAll(
-    "SELECT role, content, msg_type FROM messages WHERE session_id = ? AND visible = 1 ORDER BY id DESC LIMIT ?",
-    [session_id, (settings.max_context_rounds || 10) * 2]
-  ).reverse().map(m => {
+  // use_history 关闭时只带当前这条消息；time_hint/date_mark 开启时把时间间隔/跨日提示拼进消息开头帮 AI 理解
+  const historyLimit = settings.use_history === 0 ? 1 : (settings.max_context_rounds || 10) * 2;
+  const rows = queryAll(
+    "SELECT role, content, msg_type, created_at FROM messages WHERE session_id = ? AND visible = 1 ORDER BY id DESC LIMIT ?",
+    [session_id, historyLimit]
+  ).reverse();
+  let prevTime = null;
+  const history = rows.map(m => {
+    let prefix = '';
+    if (m.created_at && prevTime) {
+      const cur = new Date(String(m.created_at).replace(' ', 'T'));
+      const pv = new Date(String(prevTime).replace(' ', 'T'));
+      if (!isNaN(cur) && !isNaN(pv)) {
+        if (settings.date_mark !== 0 && cur.toDateString() !== pv.toDateString()) {
+          prefix += `【${cur.getMonth() + 1}月${cur.getDate()}日】`;
+        }
+        if (settings.time_hint !== 0) {
+          const gapMin = Math.round((cur - pv) / 60000);
+          if (gapMin >= 1440) prefix += `（距上一条约${Math.round(gapMin / 1440)}天后）`;
+          else if (gapMin >= 60) prefix += `（距上一条约${Math.round(gapMin / 60)}小时后）`;
+          else if (gapMin >= 30) prefix += `（距上一条约${gapMin}分钟后）`;
+        }
+      }
+    }
+    if (m.created_at) prevTime = m.created_at;
     if (m.msg_type === 'image') {
       try {
         const img = JSON.parse(m.content);
         const blocks = [{ type: 'image', source: { type: 'base64', media_type: img.media_type, data: img.data } }];
-        if (img.text) blocks.push({ type: 'text', text: img.text });
+        if (img.text || prefix) blocks.push({ type: 'text', text: prefix + (img.text || '') });
         return { role: m.role, content: blocks };
       } catch (e) { return { role: m.role, content: '[图片]' }; }
     }
-    return { role: m.role, content: m.content };
+    return { role: m.role, content: prefix ? prefix + m.content : m.content };
   });
 
   // 如果有摘要，放在历史消息最前面
