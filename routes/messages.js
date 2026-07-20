@@ -67,6 +67,27 @@ router.put('/:id/hide', (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// 清空某会话的全部消息
+router.delete('/session/:sessionId/all', (req, res) => {
+  try {
+    run("DELETE FROM messages WHERE session_id = ?", [req.params.sessionId]);
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// 按日期批量删除消息：{dates: ["2026-07-19", ...]}
+router.post('/delete-dates', (req, res) => {
+  try {
+    const dates = Array.isArray((req.body || {}).dates)
+      ? req.body.dates.filter(d => /^\d{4}-\d{2}-\d{2}$/.test(String(d))) : [];
+    if (!dates.length) return res.status(400).json({ error: '没有选中任何日期' });
+    const ph = dates.map(() => '?').join(',');
+    const before = queryAll(`SELECT COUNT(*) as c FROM messages WHERE date(created_at) IN (${ph})`, dates)[0].c;
+    run(`DELETE FROM messages WHERE date(created_at) IN (${ph})`, dates);
+    res.json({ ok: true, deleted: before, dates });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // 删除消息
 router.delete('/:id', (req, res) => {
   try {
