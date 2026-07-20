@@ -66,10 +66,21 @@ router.post('/import', (req, res) => {
 
 // ── 智能导入：任意 .md/.json 丢给 DeepSeek 后台清洗(去重/剔无效)后并入当前对话 ──
 const IMPORT_PROMPT = `你是聊天记录清洗器。下面是一段聊天记录原文（可能是 markdown 或任意格式）。任务：
+
 1. 识别对话双方：用户(Jasmine一方)标 role="user"，AI(Cael/助手一方)标 role="assistant"。
-2. 丢弃无效内容：系统提示、单独成行的时间戳、重复的消息、空白、纯符号、导出工具的页眉页脚。
-3. 消息原文保留，不要改写、不要总结、不要翻译。
-4. 某条消息带明确时间就输出 time 字段(YYYY-MM-DD HH:MM:SS)，没有就省略。
+
+2. 识别并合并"重发/重新生成"的痕迹——这是重点：
+   - 用户同一句话（或几乎相同的话）连续出现多次 = 用户在重发 → 只保留一次；
+   - 同一条用户消息后面跟着多条 AI 回复，内容相近但措辞不同 = AI 被重新生成了多个版本 → 只保留最后一个版本，前面的版本全部丢弃；
+   - 一段对话整体重复出现（用户+AI成对重复）→ 整组只保留一次；
+   - AI 回复里混着思考过程（推理自白、"让我想想"、分析步骤、<thinking>之类的标记段），之后才是正式回复 → 思考过程丢弃，只保留正式回复。
+
+3. 丢弃无效内容：系统提示、单独成行的时间戳、空白、纯符号、导出工具的页眉页脚。
+
+4. 保留下来的消息一律用原文，不要改写、不要总结、不要翻译。
+
+5. 某条消息带明确时间就输出 time 字段(YYYY-MM-DD HH:MM:SS)，没有就省略。
+
 只输出 JSON 数组，不要输出任何其它文字：
 [{"role":"user","content":"..."},{"role":"assistant","content":"...","time":"2026-07-01 12:00:00"}]
 若这段全是无效内容，输出 []`;
@@ -124,7 +135,8 @@ router.post('/import-smart', (req, res) => {
           // 切块（约2600字符一块）逐块交给 DeepSeek 解析+清洗
           const lines = text.split(/\r?\n/);
           const chunks = []; let cur = []; let len = 0;
-          for (const l of lines) { cur.push(l); len += l.length + 1; if (len > 2600) { chunks.push(cur.join('\n')); cur = []; len = 0; } }
+          // 块切大一点(约3600字符)：让"一次重发+多个重生成版本"尽量落在同一块里，DS才看得到全貌去合并
+          for (const l of lines) { cur.push(l); len += l.length + 1; if (len > 3600) { chunks.push(cur.join('\n')); cur = []; len = 0; } }
           if (cur.length) chunks.push(cur.join('\n'));
           importJob.totalChunks = chunks.length;
           const { bgComplete } = require('../services/bgLLM');
