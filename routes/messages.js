@@ -2,6 +2,14 @@ const express = require('express');
 const router = express.Router();
 const { queryAll, run } = require('../db');
 
+// 哪些日期有聊天记录（日历视图用）：[{d:"2026-07-20", c:20}, ...]
+router.get('/dates/all', (req, res) => {
+  try {
+    const rows = queryAll("SELECT date(created_at) as d, COUNT(*) as c FROM messages WHERE visible = 1 GROUP BY date(created_at) ORDER BY d");
+    res.json({ dates: rows });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // 全局搜索聊天记录：?q=关键词 &type=image|link &date=YYYY-MM-DD（三者至少一个）
 router.get('/search/all', (req, res) => {
   try {
