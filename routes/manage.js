@@ -69,17 +69,21 @@ const IMPORT_PROMPT = `你是聊天记录清洗器。下面是一段聊天记录
 
 1. 识别对话双方：用户(Jasmine一方)标 role="user"，AI(Cael/助手一方)标 role="assistant"。
 
-2. 识别并合并"重发/重新生成"的痕迹——这是重点：
-   - 用户同一句话（或几乎相同的话）连续出现多次 = 用户在重发 → 只保留一次；
-   - 同一条用户消息后面跟着多条 AI 回复，内容相近但措辞不同 = AI 被重新生成了多个版本 → 只保留最后一个版本，前面的版本全部丢弃；
-   - 一段对话整体重复出现（用户+AI成对重复）→ 整组只保留一次；
-   - AI 回复里混着思考过程（推理自白、"让我想想"、分析步骤、<thinking>之类的标记段），之后才是正式回复 → 思考过程丢弃，只保留正式回复。
+2. 过滤 thinking/reasoning：AI 的思考过程、推理自白、"让我想想"、分析步骤、<thinking>/<reasoning> 标记段、或整条只是思考没有正式回复的消息 → 全部丢弃，只保留 AI 对用户说的正式回复。
 
-3. 丢弃无效内容：系统提示、单独成行的时间戳、空白、纯符号、导出工具的页眉页脚。
+3. 回退产生的多版本回复只留最后一条：同一条用户消息后面跟着多条内容相近但措辞不同的 AI 回复（重新生成/重试的痕迹）→ 只保留最后一个版本，前面的版本全部丢弃。
 
-4. 保留下来的消息一律用原文，不要改写、不要总结、不要翻译。
+4. 手误刷新的连续 user 消息：用户同一句话（或几乎相同）连续出现多次 = 重发 → 合并成一条，只保留最后一次。
 
-5. 某条消息带明确时间就输出 time 字段(YYYY-MM-DD HH:MM:SS)，没有就省略。
+5. 空消息丢掉：content 去掉空白后为空、或只有纯符号/表情标记的消息 → 丢弃。
+
+6. 孤儿 tool_call / tool_result 丢掉：没有配对的工具调用块、工具返回块、函数调用 JSON 残片、[tool_call]/[tool_result] 之类的标记 → 全部丢弃（这些不是对话内容）。
+
+7. 整段对话成对重复出现（用户+AI 一起重复）→ 整组只保留一次。
+
+8. 丢弃其它无效内容：系统提示、单独成行的时间戳、导出工具的页眉页脚。
+
+保留下来的消息一律用原文，不要改写、不要总结、不要翻译。某条消息带明确时间就输出 time 字段(YYYY-MM-DD HH:MM:SS)，没有就省略。
 
 只输出 JSON 数组，不要输出任何其它文字：
 [{"role":"user","content":"..."},{"role":"assistant","content":"...","time":"2026-07-01 12:00:00"}]
@@ -94,14 +98,6 @@ router.post('/import-smart', (req, res) => {
     if (!text.trim()) return res.status(400).json({ error: '文件是空的' });
     if (importJob && importJob.status === 'running') return res.status(409).json({ error: '已有导入任务在进行中，稍等一下' });
 
-    // 目标会话：优先用前端传来的，否则最新会话，再没有就建一个
-    let sid = Number(body.session_id) || 0;
-    if (!sid) {
-      const s = queryOne('SELECT id FROM sessions ORDER BY id DESC LIMIT 1');
-      if (s) sid = s.id;
-      else { run("INSERT INTO sessions (name) VALUES ('对话')"); sid = lastInsertId(); }
-    }
-
     // 先试试是不是本应用导出的 json，是的话不用花 DeepSeek 的钱
     let directMsgs = null;
     try {
@@ -109,50 +105,51 @@ router.post('/import-smart', (req, res) => {
       if (Array.isArray(j.sessions)) {
         directMsgs = j.sessions.flatMap(s => s.messages || [])
           .filter(m => (m.msg_type || 'text') === 'text')
-          .map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: String(m.content || ''), created_at: m.created_at || null }));
+          .map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: String(m.content || ''), time: m.created_at || null }));
       }
     } catch (e) { /* 不是json，走DS清洗 */ }
 
+    // 清洗结果写入暂存区（先清空旧暂存），用户审阅后再上传到对话
+    run("DELETE FROM import_staging");
     importJob = { status: 'running', totalChunks: 0, doneChunks: 0, imported: 0, skipped: 0, error: null, cancelRequested: false };
-    res.json({ ok: true, started: true, session_id: sid });
+    res.json({ ok: true, started: true });
 
     setImmediate(async () => {
       try {
-        const existing = new Set(queryAll('SELECT content FROM messages WHERE session_id = ?', [sid]).map(r => String(r.content).trim()));
-        const insert = (m) => {
+        let ord = 0;
+        const seen = new Set();
+        const stage = (m) => {
           const c = String(m.content || '').trim();
-          if (!c || existing.has(c)) { importJob.skipped++; return; }
-          existing.add(c);
-          run("INSERT INTO messages (session_id, role, content, created_at) VALUES (?,?,?, COALESCE(?, datetime('now','+8 hours')))",
-            [sid, m.role === 'assistant' ? 'assistant' : 'user', c, m.created_at || m.time || null]);
+          if (!c || seen.has(c)) { importJob.skipped++; return; }
+          seen.add(c);
+          run("INSERT INTO import_staging (role, content, time, ord) VALUES (?,?,?,?)",
+            [m.role === 'assistant' ? 'assistant' : 'user', c, m.time || m.created_at || null, ord++]);
           importJob.imported++;
         };
         if (directMsgs) {
           importJob.totalChunks = 1;
-          for (const m of directMsgs) insert(m);
+          for (const m of directMsgs) stage(m);
           importJob.doneChunks = 1;
         } else {
-          // 切块（约2600字符一块）逐块交给 DeepSeek 解析+清洗
+          // 切块（约3600字符）逐块交给 DeepSeek 解析+清洗：让重发+多版本重生成尽量落在同一块看到全貌
           const lines = text.split(/\r?\n/);
           const chunks = []; let cur = []; let len = 0;
-          // 块切大一点(约3600字符)：让"一次重发+多个重生成版本"尽量落在同一块里，DS才看得到全貌去合并
           for (const l of lines) { cur.push(l); len += l.length + 1; if (len > 3600) { chunks.push(cur.join('\n')); cur = []; len = 0; } }
           if (cur.length) chunks.push(cur.join('\n'));
           importJob.totalChunks = chunks.length;
           const { bgComplete } = require('../services/bgLLM');
           for (const chunk of chunks) {
-            if (importJob.cancelRequested) { importJob.status = 'cancelled'; console.log(`[import-smart] 已中断：导入${importJob.imported}条后停止`); return; }
+            if (importJob.cancelRequested) { importJob.status = 'cancelled'; console.log(`[import-smart] 已中断：暂存${importJob.imported}条后停止`); return; }
             try {
               const out = await bgComplete({ system: IMPORT_PROMPT, user: chunk, maxTokens: 4000, timeoutMs: 120000 });
               const mm = out.match(/\[[\s\S]*\]/);
-              if (mm) for (const item of JSON.parse(mm[0])) insert(item);
+              if (mm) for (const item of JSON.parse(mm[0])) stage(item);
             } catch (e) { console.warn('[import-smart] 块处理失败:', e.message); }
             importJob.doneChunks++;
           }
         }
-        run("UPDATE sessions SET updated_at = datetime('now','+8 hours') WHERE id = ?", [sid]);
         importJob.status = 'done';
-        console.log(`[import-smart] 完成：导入${importJob.imported}条，跳过${importJob.skipped}条`);
+        console.log(`[import-smart] 清洗完成：暂存${importJob.imported}条，跳过${importJob.skipped}条`);
       } catch (e) { importJob.status = 'error'; importJob.error = e.message; }
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -160,10 +157,82 @@ router.post('/import-smart', (req, res) => {
 
 router.get('/import-status', (req, res) => { res.json(importJob || { status: 'idle' }); });
 
-// 中断正在进行的导入（当前块处理完就停，已导入的保留）
+// 中断正在进行的导入（当前块处理完就停，已暂存的保留）
 router.post('/import-cancel', (req, res) => {
   if (importJob && importJob.status === 'running') { importJob.cancelRequested = true; return res.json({ ok: true, cancelling: true }); }
   res.json({ ok: true, cancelling: false });
+});
+
+// ── 暂存审阅区：清洗结果先落这里，用户可改删，再选择上传到对话 / 备份 ──
+router.get('/staging', (req, res) => {
+  try { res.json({ items: queryAll("SELECT id, role, content, time FROM import_staging ORDER BY ord, id") }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.put('/staging/:id', (req, res) => {
+  try {
+    const b = req.body || {};
+    const fields = [], vals = [];
+    if (b.content !== undefined) { fields.push('content = ?'); vals.push(String(b.content)); }
+    if (b.role !== undefined) { fields.push('role = ?'); vals.push(b.role === 'assistant' ? 'assistant' : 'user'); }
+    if (!fields.length) return res.status(400).json({ error: '没有可改的字段' });
+    vals.push(req.params.id);
+    run(`UPDATE import_staging SET ${fields.join(', ')} WHERE id = ?`, vals);
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.delete('/staging/:id', (req, res) => {
+  try { run("DELETE FROM import_staging WHERE id = ?", [req.params.id]); res.json({ ok: true }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/staging/clear', (req, res) => {
+  try { run("DELETE FROM import_staging"); res.json({ ok: true }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// 上传到当前对话：把暂存区全部插入目标会话（与已有消息去重），然后清空暂存
+router.post('/staging/commit', (req, res) => {
+  try {
+    let sid = Number((req.body || {}).session_id) || 0;
+    if (!sid) {
+      const s = queryOne('SELECT id FROM sessions ORDER BY id DESC LIMIT 1');
+      if (s) sid = s.id; else { run("INSERT INTO sessions (name) VALUES ('对话')"); sid = lastInsertId(); }
+    }
+    const rows = queryAll("SELECT role, content, time FROM import_staging ORDER BY ord, id");
+    const existing = new Set(queryAll('SELECT content FROM messages WHERE session_id = ?', [sid]).map(r => String(r.content).trim()));
+    let imported = 0, skipped = 0;
+    for (const m of rows) {
+      const c = String(m.content || '').trim();
+      if (!c || existing.has(c)) { skipped++; continue; }
+      existing.add(c);
+      run("INSERT INTO messages (session_id, role, content, created_at) VALUES (?,?,?, COALESCE(?, datetime('now','+8 hours')))",
+        [sid, m.role === 'assistant' ? 'assistant' : 'user', c, m.time || null]);
+      imported++;
+    }
+    run("UPDATE sessions SET updated_at = datetime('now','+8 hours') WHERE id = ?", [sid]);
+    run("DELETE FROM import_staging");
+    res.json({ ok: true, imported, skipped, session_id: sid });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// 备份：把暂存区导出成 json/md 文件下载（不进对话）
+router.get('/staging/export', (req, res) => {
+  try {
+    const fmt = req.query.format === 'md' ? 'md' : 'json';
+    const rows = queryAll("SELECT role, content, time FROM import_staging ORDER BY ord, id");
+    if (fmt === 'json') {
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      res.setHeader('Content-Disposition', 'attachment; filename="plutocael-staging.json"');
+      return res.send(JSON.stringify({ app: 'plutocael', staged_at: nowStr(), messages: rows }, null, 1));
+    }
+    let md = `# Plutocael 暂存对话\n\n导出时间：${nowStr()}\n\n`;
+    for (const m of rows) md += `**${m.role === 'user' ? 'Jasmine' : 'Cael'}**${m.time ? `（${m.time}）` : ''}\n\n${m.content}\n\n`;
+    res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="plutocael-staging.md"');
+    res.send(md);
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // 备份：把整个 SQLite 库快照到 backups/

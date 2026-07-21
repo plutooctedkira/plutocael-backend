@@ -93,6 +93,17 @@ async function initDB() {
     )
   `);
 
+  // 导入暂存区：智能导入清洗后的结果先落这里，用户在前端审阅/改删后再上传到对话
+  db.run(`
+    CREATE TABLE IF NOT EXISTS import_staging (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      time TEXT,
+      ord INTEGER DEFAULT 0
+    )
+  `);
+
   // MCP 服务器列表（可在前端增删启停，聊天聚合所有启用服务器的工具）
   db.run(`
     CREATE TABLE IF NOT EXISTS mcp_servers (
