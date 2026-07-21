@@ -3,7 +3,7 @@ const express = require('express');
 const router = express.Router();
 const fs = require('fs');
 const path = require('path');
-const { queryAll, queryOne, run, lastInsertId, initDB } = require('../db');
+const { queryAll, queryOne, run, lastInsertId, initDB, save } = require('../db');
 
 const ROOT = path.join(__dirname, '..');
 const DB_PATH = path.join(ROOT, 'plutocael.db');
@@ -254,6 +254,46 @@ router.get('/backups', (req, res) => {
       .map(f => { const st = fs.statSync(path.join(BACKUP_DIR, f)); return { file: f, size: st.size, mtime: st.mtime }; })
       .sort((a, b) => b.mtime - a.mtime);
     res.json({ backups: files });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// 本地备份：把当前数据库文件直接下载到用户设备
+router.get('/backup/download', (req, res) => {
+  try {
+    try { save(); } catch (e) {} // 确保磁盘文件是最新的内存状态
+    const name = `plutocael-${nowStr().replace(/[: ]/g, '-')}.db`;
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
+    res.send(fs.readFileSync(DB_PATH));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// 删除某个云端备份
+router.delete('/backups/:file', (req, res) => {
+  try {
+    const file = path.basename(String(req.params.file || ''));
+    if (!/^plutocael-[\w.-]+\.db$/.test(file)) return res.status(400).json({ error: '文件名不合法' });
+    const p = path.join(BACKUP_DIR, file);
+    if (fs.existsSync(p)) fs.unlinkSync(p);
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// 从本地上传的 .db 文件恢复：body {data: base64}
+router.post('/restore-upload', async (req, res) => {
+  try {
+    const b64 = String((req.body || {}).data || '');
+    if (!b64) return res.status(400).json({ error: '没有收到文件内容' });
+    const buf = Buffer.from(b64.replace(/^data:[^,]*,/, ''), 'base64');
+    // 校验是 SQLite 文件（前16字节固定为 "SQLite format 3\0"）
+    if (buf.slice(0, 15).toString('utf8') !== 'SQLite format 3') {
+      return res.status(400).json({ error: '这不是有效的 Plutocael 备份文件(.db)' });
+    }
+    fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    fs.copyFileSync(DB_PATH, path.join(BACKUP_DIR, `plutocael-pre-restore-${nowStr().replace(/[: ]/g, '-')}.db`));
+    fs.writeFileSync(DB_PATH, buf);
+    await initDB();
+    res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
