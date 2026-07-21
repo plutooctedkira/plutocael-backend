@@ -40,6 +40,12 @@ async function execToolUses(toolUses, toolLogLines, onEvent) {
 
 const MAX_TOOL_ROUNDS = 5;
 
+// 把本轮 usage 压成紧凑 JSON 存到消息上：{in,out,cr,cw}
+function compactUsage(u) {
+  if (!u) return null;
+  return JSON.stringify({ in: u.input_tokens || 0, out: u.output_tokens || 0, cr: u.cache_read_input_tokens || 0, cw: u.cache_creation_input_tokens || 0 });
+}
+
 // 消息压缩：当消息数超过阈值，用 Claude 总结旧消息
 async function compressOldMessages(session_id, threshold = 40, keepRecent = 20) {
   try {
@@ -281,6 +287,7 @@ router.post('/', async (req, res) => {
     const messages = history.map(m => ({ role: m.role, content: m.content }));
     let reply = '', reasoning = '';
     const toolLogLines = [];
+    const turnUsage = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
 
     for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
       const apiRes = await fetch(apiBaseUrl, {
@@ -293,6 +300,7 @@ router.post('/', async (req, res) => {
 
       const apiData = await apiRes.json();
       try { logUsage(session_id, model, apiData.usage); } catch (e) { console.warn('logUsage failed:', e.message); }
+      if (apiData.usage) for (const k of Object.keys(turnUsage)) turnUsage[k] += apiData.usage[k] || 0;
 
       reply += apiData.content.filter(b => b.type === 'text').map(b => b.text).join('');
       reasoning += apiData.content.filter(b => b.type === 'thinking').map(b => b.thinking).join('');
@@ -322,11 +330,12 @@ router.post('/', async (req, res) => {
     }
 
     const toolLog = toolLogLines.length ? toolLogLines.join('\n') : null;
-    run("INSERT INTO messages (session_id, role, content, reasoning_content, tool_log) VALUES (?, 'assistant', ?, ?, ?)", [session_id, reply, reasoning || null, toolLog]);
+    const usageJson = compactUsage(turnUsage);
+    run("INSERT INTO messages (session_id, role, content, reasoning_content, tool_log, usage) VALUES (?, 'assistant', ?, ?, ?, ?)", [session_id, reply, reasoning || null, toolLog, usageJson]);
     run("UPDATE sessions SET updated_at = datetime('now', '+8 hours') WHERE id = ?", [session_id]);
     try { require('../services/autoMemory').autoMemorize(content, reply); } catch (e) { console.warn('autoMemory hook failed:', e.message); }
 
-    res.json({ role: 'assistant', content: reply, reasoning_content: reasoning || null, tool_log: toolLog });
+    res.json({ role: 'assistant', content: reply, reasoning_content: reasoning || null, tool_log: toolLog, usage: usageJson });
   } catch (err) { console.error('Chat error:', err); res.status(500).json({ error: err.message }); }
 });
 
@@ -475,11 +484,13 @@ router.post('/stream', async (req, res) => {
     sse({ type: 'done' });
 
     if (fullReply) {
-      run("INSERT INTO messages (session_id, role, content, reasoning_content, tool_log) VALUES (?, 'assistant', ?, ?, ?)",
-        [session_id, fullReply, fullThinking || null, toolLogLines.length ? toolLogLines.join('\n') : null]);
+      const usageJson = usage.output_tokens ? compactUsage(usage) : null;
+      run("INSERT INTO messages (session_id, role, content, reasoning_content, tool_log, usage) VALUES (?, 'assistant', ?, ?, ?, ?)",
+        [session_id, fullReply, fullThinking || null, toolLogLines.length ? toolLogLines.join('\n') : null, usageJson]);
       run("UPDATE sessions SET updated_at = datetime('now', '+8 hours') WHERE id = ?", [session_id]);
       try { logUsage(session_id, model, usage.output_tokens ? usage : null); } catch (e) { console.warn('logUsage failed:', e.message); }
       try { require('../services/autoMemory').autoMemorize(content, fullReply); } catch (e) { console.warn('autoMemory hook failed:', e.message); }
+      if (usageJson) sse({ type: 'usage', usage: usageJson });
     }
     res.end();
   } catch (err) {

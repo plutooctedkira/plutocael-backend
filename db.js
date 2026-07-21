@@ -89,6 +89,9 @@ async function initDB() {
   // 迁移：messages 表的消息类型列（text/image）
   try { db.run("ALTER TABLE messages ADD COLUMN msg_type TEXT DEFAULT 'text'"); } catch (e) { /* 列已存在 */ }
 
+  // 迁移：messages 表的本轮 token 用量列（JSON: {in,out,cr,cw}）
+  try { db.run("ALTER TABLE messages ADD COLUMN usage TEXT DEFAULT NULL"); } catch (e) { /* 列已存在 */ }
+
   // 留言板
   db.run(`
     CREATE TABLE IF NOT EXISTS board_messages (
