@@ -112,23 +112,10 @@ ${layerText}
   } catch (e) { /* 压缩异常不打断对话 */ }
 }
 
-// 共用的上下文组装逻辑
-async function buildContext(session_id) {
-  const settings = queryOne("SELECT * FROM settings LIMIT 1");
-  if (!settings) throw new Error("设置不存在");
-
-  // 先尝试压缩旧消息
-  await compressOldMessages(session_id);
-
-  // 取当前可见消息（图片消息转成 Claude vision 内容块）
-  // use_history 关闭时只带当前这条消息；time_hint/date_mark 开启时把时间间隔/跨日提示拼进消息开头帮 AI 理解
-  const historyLimit = settings.use_history === 0 ? 1 : (settings.max_context_rounds || 10) * 2;
-  const rows = queryAll(
-    "SELECT role, content, msg_type, created_at FROM messages WHERE session_id = ? AND visible = 1 ORDER BY id DESC LIMIT ?",
-    [session_id, historyLimit]
-  ).reverse();
+// 把一批消息行映射成 Claude 消息（处理图片 vision 块 + 时间/日期提示前缀）
+function rowsToMessages(rows, settings) {
   let prevTime = null;
-  const history = rows.map(m => {
+  return rows.map(m => {
     let prefix = '';
     if (m.created_at && prevTime) {
       const cur = new Date(String(m.created_at).replace(' ', 'T'));
@@ -156,11 +143,35 @@ async function buildContext(session_id) {
     }
     return { role: m.role, content: prefix ? prefix + m.content : m.content };
   });
+}
 
-  // 如果有摘要，放在历史消息最前面
-  const sess = queryOne("SELECT summary FROM sessions WHERE id = ?", [session_id]);
-  if (sess && sess.summary) {
-    history.unshift({ role: 'assistant', content: `[对话历史摘要]\n${sess.summary}` });
+// 共用的上下文组装逻辑
+async function buildContext(session_id) {
+  const settings = queryOne("SELECT * FROM settings LIMIT 1");
+  if (!settings) throw new Error("设置不存在");
+
+  let history = [];
+  let summaryText = '';
+  if (settings.use_history === 0) {
+    // 关闭历史：只带当前这条消息
+    const rows = queryAll("SELECT role, content, msg_type, created_at FROM messages WHERE session_id = ? AND visible = 1 ORDER BY id DESC LIMIT 1", [session_id]).reverse();
+    history = rowsToMessages(rows, settings);
+  } else if (settings.ctx_manage !== 0) {
+    // 滚动上下文管理：summary（进 system）→ frozen → active
+    const { getContextParts } = require('../services/contextManager');
+    const { summaries, frozenRows, activeRows } = getContextParts(session_id, settings);
+    if (summaries.length) summaryText = summaries.join('\n\n---\n\n');
+    const frozenMsgs = rowsToMessages(frozenRows, settings);
+    if (frozenMsgs.length) frozenMsgs[frozenMsgs.length - 1].cacheBreak = true; // frozen 末尾设缓存断点
+    history = frozenMsgs.concat(rowsToMessages(activeRows, settings));
+  } else {
+    // 旧行为：滑动窗口 + 单条摘要（ctx_manage 关闭时）
+    await compressOldMessages(session_id);
+    const historyLimit = (settings.max_context_rounds || 10) * 2;
+    const rows = queryAll("SELECT role, content, msg_type, created_at FROM messages WHERE session_id = ? AND visible = 1 ORDER BY id DESC LIMIT ?", [session_id, historyLimit]).reverse();
+    history = rowsToMessages(rows, settings);
+    const sess = queryOne("SELECT summary FROM sessions WHERE id = ?", [session_id]);
+    if (sess && sess.summary) summaryText = sess.summary;
   }
 
   // Prompt Cache 原则：稳定内容在前（可缓存），易变内容在后
@@ -191,10 +202,11 @@ async function buildContext(session_id) {
   }
 
   const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
-  const systemPrompt = [
-    { type: 'text', text: stablePart, cache_control: { type: 'ephemeral' } },
-    { type: 'text', text: `当前时间：${now}` }
-  ];
+  // system → summary（都进稳定缓存区）→ 当前时间（每次变，放最后不缓存）
+  const systemPrompt = [{ type: 'text', text: stablePart }];
+  if (summaryText) systemPrompt.push({ type: 'text', text: `【之前对话的摘要】\n${summaryText}` });
+  systemPrompt[systemPrompt.length - 1].cache_control = { type: 'ephemeral' }; // 缓存断点落在稳定区末尾
+  systemPrompt.push({ type: 'text', text: `当前时间：${now}` });
 
   // 防手滑：API Key/地址 只能是 ASCII（HTTP 头不允许中文），混入非法字符就当没填、回退 env
   const validHeader = (v) => v && /^[\x21-\x7E]+$/.test(v.trim()) ? v.trim() : null;
@@ -211,20 +223,21 @@ async function buildContext(session_id) {
 
 // 组装请求体：开启 thinking 时用 adaptive 模式（此时不传 temperature，两者不兼容）
 function buildRequestBody(settings, model, systemPrompt, messages, stream = false, tools = null) {
-  const msgs = messages.map(m => ({ role: m.role, content: m.content }));
-  // Prompt caching 第二断点：挂在最后一条消息上，让整段对话历史前缀命中缓存，
-  // 多轮聊天时每轮只有新增内容按全价计费（system 稳定块已有第一断点）
-  if (msgs.length > 0) {
-    const last = msgs[msgs.length - 1];
-    if (typeof last.content === 'string' && last.content) {
-      last.content = [{ type: 'text', text: last.content, cache_control: { type: 'ephemeral' } }];
-    } else if (Array.isArray(last.content) && last.content.length > 0) {
-      const blocks = last.content.map(b => ({ ...b }));
+  const setBreak = (m) => {
+    if (typeof m.content === 'string' && m.content) {
+      m.content = [{ type: 'text', text: m.content, cache_control: { type: 'ephemeral' } }];
+    } else if (Array.isArray(m.content) && m.content.length > 0) {
+      const blocks = m.content.map(b => ({ ...b }));
       const lb = blocks[blocks.length - 1];
       if (['text', 'image', 'tool_result'].includes(lb.type)) lb.cache_control = { type: 'ephemeral' };
-      last.content = blocks;
+      m.content = blocks;
     }
-  }
+  };
+  const msgs = messages.map(m => ({ role: m.role, content: m.content }));
+  // frozen 末尾的缓存断点：让 system→summary→frozen 这段稳定前缀命中缓存
+  messages.forEach((src, i) => { if (src.cacheBreak && msgs[i]) setBreak(msgs[i]); });
+  // 最后一条消息也设断点：整段历史前缀命中缓存，每轮只新增内容按全价
+  if (msgs.length > 0) setBreak(msgs[msgs.length - 1]);
   const body = {
     model,
     max_tokens: settings.max_reply_tokens || 2000,

@@ -18,7 +18,7 @@ router.put('/:id', (req, res) => {
       'max_context_tokens', 'compress_threshold', 'compress_keep_rounds', 'max_reply_tokens',
       'api_base_url', 'api_key', 'model', 'enable_thinking', 'enable_mcp',
       'cheap_api_base_url', 'cheap_api_key', 'cheap_model', 'appearance', 'wallpaper', 'avatar_user', 'avatar_ai',
-      'use_history', 'time_hint', 'date_mark'];
+      'use_history', 'time_hint', 'date_mark', 'ctx_manage', 'ctx_active_rounds', 'ctx_summary_keep'];
     const updates = [];
     const values = [];
     for (const key of allowed) {

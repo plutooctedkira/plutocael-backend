@@ -68,13 +68,18 @@ async function initDB() {
   try {
     db.run("ALTER TABLE sessions ADD COLUMN summary TEXT DEFAULT NULL");
   } catch (e) { /* 列已存在 */ }
+  // 迁移：滚动上下文管理的 frozen 边界（frozen_end_id=0 表示还没冻结）
+  for (const col of ['frozen_start_id INTEGER DEFAULT 0', 'frozen_end_id INTEGER DEFAULT 0']) {
+    try { db.run(`ALTER TABLE sessions ADD COLUMN ${col}`); } catch (e) { /* 列已存在 */ }
+  }
 
   // 迁移：settings 表的 API 配置列（chat.js 依赖这三列，新库需要补上）
   // cheap_* 是便宜渠道：摘要压缩等后台任务用，省主力额度，不填则回退用主力
   for (const col of ['api_base_url TEXT', 'api_key TEXT', 'model TEXT', 'enable_thinking INTEGER DEFAULT 0', 'enable_mcp INTEGER DEFAULT 1',
     'cheap_api_base_url TEXT', 'cheap_api_key TEXT', 'cheap_model TEXT',
     'appearance TEXT', 'wallpaper TEXT', 'avatar_user TEXT', 'avatar_ai TEXT',
-    'use_history INTEGER DEFAULT 1', 'time_hint INTEGER DEFAULT 1', 'date_mark INTEGER DEFAULT 1']) {
+    'use_history INTEGER DEFAULT 1', 'time_hint INTEGER DEFAULT 1', 'date_mark INTEGER DEFAULT 1',
+    'ctx_manage INTEGER DEFAULT 1', 'ctx_active_rounds INTEGER DEFAULT 8', 'ctx_summary_keep INTEGER DEFAULT 3']) {
     try { db.run(`ALTER TABLE settings ADD COLUMN ${col}`); } catch (e) { /* 列已存在 */ }
   }
 
@@ -89,6 +94,19 @@ async function initDB() {
     CREATE TABLE IF NOT EXISTS board_messages (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       content TEXT NOT NULL,
+      created_at DATETIME DEFAULT (datetime('now', '+8 hours'))
+    )
+  `);
+
+  // 滚动上下文的摘要块：pending(生成中)/ready(完成待晋升)/committed(已注入请求)
+  db.run(`
+    CREATE TABLE IF NOT EXISTS context_summaries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id INTEGER NOT NULL,
+      frozen_end_id INTEGER DEFAULT 0,
+      content TEXT DEFAULT '',
+      status TEXT DEFAULT 'pending',
+      ord INTEGER DEFAULT 0,
       created_at DATETIME DEFAULT (datetime('now', '+8 hours'))
     )
   `);
