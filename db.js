@@ -101,6 +101,18 @@ async function initDB() {
     )
   `);
 
+  // API 渠道预设：存多个渠道，一键切换（切换=把该渠道的地址/key/模型写进 settings）
+  db.run(`
+    CREATE TABLE IF NOT EXISTS api_channels (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      api_base_url TEXT DEFAULT '',
+      api_key TEXT DEFAULT '',
+      model TEXT DEFAULT '',
+      created_at DATETIME DEFAULT (datetime('now', '+8 hours'))
+    )
+  `);
+
   // 滚动上下文的摘要块：pending(生成中)/ready(完成待晋升)/committed(已注入请求)
   db.run(`
     CREATE TABLE IF NOT EXISTS context_summaries (

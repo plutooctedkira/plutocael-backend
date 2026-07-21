@@ -1,6 +1,52 @@
 const express = require('express');
 const router = express.Router();
-const { queryOne, run } = require('../db');
+const { queryOne, queryAll, run, lastInsertId } = require('../db');
+
+// ── API 渠道预设：存多个，一键切换 ──
+router.get('/channels', (req, res) => {
+  try { res.json({ channels: queryAll("SELECT id, name, api_base_url, api_key, model FROM api_channels ORDER BY id") }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/channels', (req, res) => {
+  try {
+    const b = req.body || {};
+    if (!String(b.name || '').trim()) return res.status(400).json({ error: '给渠道起个名字吧' });
+    run("INSERT INTO api_channels (name, api_base_url, api_key, model) VALUES (?,?,?,?)",
+      [String(b.name).trim(), String(b.api_base_url || '').trim(), String(b.api_key || '').trim(), String(b.model || '').trim()]);
+    res.json({ ok: true, id: lastInsertId() });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.put('/channels/:id', (req, res) => {
+  try {
+    const b = req.body || {};
+    const fields = [], vals = [];
+    for (const k of ['name', 'api_base_url', 'api_key', 'model']) {
+      if (b[k] !== undefined) { fields.push(`${k} = ?`); vals.push(String(b[k]).trim()); }
+    }
+    if (!fields.length) return res.status(400).json({ error: '没有可改的字段' });
+    vals.push(req.params.id);
+    run(`UPDATE api_channels SET ${fields.join(', ')} WHERE id = ?`, vals);
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.delete('/channels/:id', (req, res) => {
+  try { run("DELETE FROM api_channels WHERE id = ?", [req.params.id]); res.json({ ok: true }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// 一键切换：把这个渠道的地址/key/模型写进 settings（主力聊天渠道）
+router.post('/channels/:id/activate', (req, res) => {
+  try {
+    const ch = queryOne("SELECT * FROM api_channels WHERE id = ?", [req.params.id]);
+    if (!ch) return res.status(404).json({ error: '渠道不存在' });
+    run("UPDATE settings SET api_base_url = ?, api_key = ?, model = ?, updated_at = datetime('now','+8 hours') WHERE id = 1",
+      [ch.api_base_url || '', ch.api_key || '', ch.model || '']);
+    res.json({ ok: true, model: ch.model });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
 
 // 获取设置
 router.get('/', (req, res) => {
