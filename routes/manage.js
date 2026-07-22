@@ -200,6 +200,11 @@ router.post('/staging/commit', (req, res) => {
       const s = queryOne('SELECT id FROM sessions ORDER BY id DESC LIMIT 1');
       if (s) sid = s.id; else { run("INSERT INTO sessions (name) VALUES ('对话')"); sid = lastInsertId(); }
     }
+    // 可选：给整批指定一个日期，没有自带时间戳的消息按顺序落在这一天（每条递增几秒保序）
+    const baseDate = String((req.body || {}).base_date || '').trim();
+    const useBase = /^\d{4}-\d{2}-\d{2}$/.test(baseDate);
+    const pad = n => String(n).padStart(2, '0');
+    let seq = 0;
     const rows = queryAll("SELECT role, content, time FROM import_staging ORDER BY ord, id");
     const existing = new Set(queryAll('SELECT content FROM messages WHERE session_id = ?', [sid]).map(r => String(r.content).trim()));
     let imported = 0, skipped = 0;
@@ -207,8 +212,14 @@ router.post('/staging/commit', (req, res) => {
       const c = String(m.content || '').trim();
       if (!c || existing.has(c)) { skipped++; continue; }
       existing.add(c);
+      let ts = m.time || null;
+      if (!ts && useBase) {
+        const h = pad(Math.floor(seq * 20 / 3600) % 24), mi = pad(Math.floor(seq * 20 / 60) % 60), s = pad((seq * 20) % 60);
+        ts = `${baseDate} ${h}:${mi}:${s}`;
+      }
       run("INSERT INTO messages (session_id, role, content, created_at) VALUES (?,?,?, COALESCE(?, datetime('now','+8 hours')))",
-        [sid, m.role === 'assistant' ? 'assistant' : 'user', c, m.time || null]);
+        [sid, m.role === 'assistant' ? 'assistant' : 'user', c, ts]);
+      seq++;
       imported++;
     }
     run("UPDATE sessions SET updated_at = datetime('now','+8 hours') WHERE id = ?", [sid]);
