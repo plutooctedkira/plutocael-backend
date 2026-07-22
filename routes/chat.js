@@ -5,15 +5,43 @@ const { logUsage } = require('../gateway-tracker');
 const { listTools, callTool } = require('../mcp-client');
 
 // MCP 工具列表缓存（60秒），避免每条消息都连一次 MCP 服务器
+// 把 MCP(FastMCP/Pydantic) 生成的 schema 洗成 Anthropic 官方渠道一定认的干净 2020-12 格式：
+// - 去掉 title/default/$schema 等装饰字段
+// - 把 anyOf/oneOf 里的 {type:null} 剔掉，只留一个真实类型（可空联合官方校验会挑刺）
+// - array 缺 items 时补 {}，object 递归清洗
+function sanitizeSchema(node) {
+  if (Array.isArray(node)) return node.map(sanitizeSchema);
+  if (!node || typeof node !== 'object') return node;
+  const out = {};
+  for (const [k, v] of Object.entries(node)) {
+    if (['title', 'default', '$schema', 'additionalProperties'].includes(k)) continue;
+    if ((k === 'anyOf' || k === 'oneOf') && Array.isArray(v)) {
+      const real = v.filter(x => !(x && x.type === 'null'));
+      if (real.length === 1) { Object.assign(out, sanitizeSchema(real[0])); continue; }
+      out[k] = real.map(sanitizeSchema);
+      continue;
+    }
+    if (k === 'properties' && v && typeof v === 'object') {
+      out.properties = {};
+      for (const [pk, pv] of Object.entries(v)) out.properties[pk] = sanitizeSchema(pv);
+      continue;
+    }
+    out[k] = sanitizeSchema(v);
+  }
+  if (out.type === 'array' && !out.items) out.items = {};
+  return out;
+}
+
 let mcpToolsCache = { tools: [], ts: 0 };
 async function getMcpTools() {
   if (Date.now() - mcpToolsCache.ts < 60000) return mcpToolsCache.tools;
   const raw = await listTools();
-  const tools = raw.map(t => ({
-    name: t.name,
-    description: t.description || '',
-    input_schema: (t.inputSchema && t.inputSchema.type) ? t.inputSchema : { type: 'object', properties: {} }
-  }));
+  const tools = raw.map(t => {
+    let schema = (t.inputSchema && t.inputSchema.type) ? sanitizeSchema(t.inputSchema) : { type: 'object', properties: {} };
+    if (!schema.type) schema.type = 'object';
+    if (!schema.properties) schema.properties = {};
+    return { name: t.name, description: t.description || '', input_schema: schema };
+  });
   mcpToolsCache = { tools, ts: Date.now() };
   return tools;
 }
