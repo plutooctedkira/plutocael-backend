@@ -10,6 +10,19 @@ router.get('/dates/all', (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// 批量改期：把某一天的全部消息整体挪到另一天（保留各自的时刻和顺序）
+router.post('/move-date', (req, res) => {
+  try {
+    const from = String((req.body || {}).from || '').trim();
+    const to = String((req.body || {}).to || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) return res.status(400).json({ error: '日期格式不对' });
+    const before = queryAll("SELECT COUNT(*) c FROM messages WHERE date(created_at) = ?", [from])[0].c;
+    // created_at 形如 "2026-07-22 00:00:20"，替换前10位的日期，保留后面的 " HH:MM:SS"
+    run("UPDATE messages SET created_at = ? || substr(created_at, 11) WHERE date(created_at) = ?", [to, from]);
+    res.json({ ok: true, moved: before, from, to });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // 全局搜索聊天记录：?q=关键词 &type=image|link &date=YYYY-MM-DD（三者至少一个）
 router.get('/search/all', (req, res) => {
   try {
