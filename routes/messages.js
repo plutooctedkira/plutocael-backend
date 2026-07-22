@@ -32,10 +32,10 @@ router.get('/search/all', (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// 获取某个会话的所有消息
+// 获取某个会话的所有消息（按时间排序：导入的老对话按其真实时间归位，不再堆在最底下；同一时间用 id 兜底）
 router.get('/session/:sessionId', (req, res) => {
   try {
-    const data = queryAll("SELECT * FROM messages WHERE session_id = ? ORDER BY id ASC", [req.params.sessionId]);
+    const data = queryAll("SELECT * FROM messages WHERE session_id = ? ORDER BY datetime(created_at) ASC, id ASC", [req.params.sessionId]);
     res.json(data);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -43,7 +43,7 @@ router.get('/session/:sessionId', (req, res) => {
 // 获取某个会话的可见消息
 router.get('/session/:sessionId/visible', (req, res) => {
   try {
-    const data = queryAll("SELECT * FROM messages WHERE session_id = ? AND visible = 1 ORDER BY id ASC", [req.params.sessionId]);
+    const data = queryAll("SELECT * FROM messages WHERE session_id = ? AND visible = 1 ORDER BY datetime(created_at) ASC, id ASC", [req.params.sessionId]);
     res.json(data);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
