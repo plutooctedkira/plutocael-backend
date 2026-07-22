@@ -68,6 +68,30 @@ async function execToolUses(toolUses, toolLogLines, onEvent) {
 
 const MAX_TOOL_ROUNDS = 5;
 
+// 流式剥离内联 <thinking>...</thinking>：标签内内容走 onThink，其余走 onText；标签可跨分片
+function makeThinkStripper(onText, onThink) {
+  const OPEN = '<thinking>', CLOSE = '</thinking>';
+  let inThink = false, buf = '';
+  const push = (chunk) => {
+    buf += chunk;
+    let go = true;
+    while (go) {
+      go = false;
+      if (!inThink) {
+        const i = buf.indexOf(OPEN);
+        if (i !== -1) { if (i > 0) onText(buf.slice(0, i)); buf = buf.slice(i + OPEN.length); inThink = true; go = true; }
+        else { const safe = buf.length - (OPEN.length - 1); if (safe > 0) { onText(buf.slice(0, safe)); buf = buf.slice(safe); } }
+      } else {
+        const j = buf.indexOf(CLOSE);
+        if (j !== -1) { if (j > 0) onThink(buf.slice(0, j)); buf = buf.slice(j + CLOSE.length); inThink = false; go = true; }
+        else { const safe = buf.length - (CLOSE.length - 1); if (safe > 0) { onThink(buf.slice(0, safe)); buf = buf.slice(safe); } }
+      }
+    }
+  };
+  const flush = () => { if (buf) { (inThink ? onThink : onText)(buf); buf = ''; } };
+  return { push, flush };
+}
+
 // 把本轮 usage 压成紧凑 JSON 存到消息上：{in,out,cr,cw}
 function compactUsage(u) {
   if (!u) return null;
@@ -330,7 +354,14 @@ router.post('/', async (req, res) => {
       try { logUsage(session_id, model, apiData.usage); } catch (e) { console.warn('logUsage failed:', e.message); }
       if (apiData.usage) for (const k of Object.keys(turnUsage)) turnUsage[k] += apiData.usage[k] || 0;
 
-      reply += apiData.content.filter(b => b.type === 'text').map(b => b.text).join('');
+      {
+        let rawText = apiData.content.filter(b => b.type === 'text').map(b => b.text).join('');
+        // 剥离内联 <thinking>：闭合的移进 reasoning，未闭合的尾巴也归到 reasoning
+        rawText = rawText.replace(/<thinking>([\s\S]*?)<\/thinking>/g, (_, t) => { reasoning += t; return ''; });
+        const oi = rawText.indexOf('<thinking>');
+        if (oi !== -1) { reasoning += rawText.slice(oi + 10); rawText = rawText.slice(0, oi); }
+        reply += rawText;
+      }
       reasoning += apiData.content.filter(b => b.type === 'thinking').map(b => b.thinking).join('');
 
       if (apiData.stop_reason !== 'tool_use') break;
@@ -415,6 +446,12 @@ router.post('/stream', async (req, res) => {
       const reader = apiRes.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
+      // 有些渠道(如可颂-反重力)把思考当普通文本裹在 <thinking></thinking> 里吐出来，
+      // 这里做流式剥离：标签内的内容归到 thinking 折叠区，正文只留真正的回复；标签可跨分片
+      const stripper = makeThinkStripper(
+        (t) => { if (curBlock && curBlock.type === 'text') curBlock.text += t; fullReply += t; sse({ type: 'text', text: t }); },
+        (t) => { fullThinking += t; sse({ type: 'thinking', text: t }); }
+      );
 
       while (true) {
         const { done, value } = await reader.read();
@@ -436,8 +473,7 @@ router.post('/stream', async (req, res) => {
             } else if (event.type === 'content_block_delta' && curBlock) {
               const d = event.delta;
               if (d.type === 'text_delta') {
-                curBlock.text += d.text; fullReply += d.text;
-                sse({ type: 'text', text: d.text });
+                stripper.push(d.text); // 剥离内联 <thinking> 后再入正文
               } else if (d.type === 'thinking_delta') {
                 curBlock.thinking += d.thinking; fullThinking += d.thinking;
                 sse({ type: 'thinking', text: d.thinking });
@@ -447,6 +483,7 @@ router.post('/stream', async (req, res) => {
                 curJson += d.partial_json;
               }
             } else if (event.type === 'content_block_stop' && curBlock) {
+              if (curBlock.type === 'text') stripper.flush(); // 冲掉剥离器里残留的尾巴
               if (curBlock.type === 'tool_use') {
                 try { curBlock.input = curJson ? JSON.parse(curJson) : {}; } catch (e) { curBlock.input = {}; }
               }
