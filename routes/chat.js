@@ -236,6 +236,12 @@ async function buildContext(session_id) {
   // 人设+记忆+留言 → 变化少，打 cache 标记；当前时间 → 每次都变，放最后单独一块
   let stablePart = settings.system_prompt || '你是Cael。';
 
+  // 追加启用的 skill（额外指令块，不替换基础人设）
+  try {
+    const skills = queryAll("SELECT name, content FROM skills WHERE active = 1 AND content != '' ORDER BY grp, ord, id");
+    for (const sk of skills) stablePart += `\n\n【技能：${sk.name}】\n${sk.content}`;
+  } catch (e) { /* skills 表可能还没建好 */ }
+
   // MCP 开启时，动态告诉 Cael 它实际拥有哪些外部工具（跟随已配置的 MCP 服务器变化）
   if (settings.enable_mcp) {
     try {

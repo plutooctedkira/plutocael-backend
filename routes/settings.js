@@ -2,6 +2,37 @@ const express = require('express');
 const router = express.Router();
 const { queryOne, queryAll, run, lastInsertId } = require('../db');
 
+// ── Skill：额外指令块，启用的追加到 system prompt 末尾 ──
+router.get('/skills', (req, res) => {
+  try { res.json({ skills: queryAll("SELECT id, name, content, grp, active FROM skills ORDER BY grp, ord, id") }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+router.post('/skills', (req, res) => {
+  try {
+    const b = req.body || {};
+    if (!String(b.name || '').trim()) return res.status(400).json({ error: '给 skill 起个名字' });
+    run("INSERT INTO skills (name, content, grp) VALUES (?,?,?)", [String(b.name).trim(), String(b.content || ''), String(b.grp || '').trim()]);
+    res.json({ ok: true, id: lastInsertId() });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+router.put('/skills/:id', (req, res) => {
+  try {
+    const b = req.body || {};
+    const fields = [], vals = [];
+    for (const k of ['name', 'content', 'grp', 'active']) {
+      if (b[k] !== undefined) { fields.push(`${k} = ?`); vals.push(k === 'active' ? (b[k] ? 1 : 0) : (k === 'name' || k === 'grp' ? String(b[k]).trim() : String(b[k]))); }
+    }
+    if (!fields.length) return res.status(400).json({ error: '没有可改的字段' });
+    vals.push(req.params.id);
+    run(`UPDATE skills SET ${fields.join(', ')} WHERE id = ?`, vals);
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+router.delete('/skills/:id', (req, res) => {
+  try { run("DELETE FROM skills WHERE id = ?", [req.params.id]); res.json({ ok: true }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // ── API 渠道预设：存多个，一键切换 ──
 router.get('/channels', (req, res) => {
   try { res.json({ channels: queryAll("SELECT id, name, api_base_url, api_key, model FROM api_channels ORDER BY id") }); }

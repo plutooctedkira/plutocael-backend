@@ -101,6 +101,19 @@ async function initDB() {
     )
   `);
 
+  // Skill：额外指令块，启用的会追加到 system prompt 末尾（不替换 Cael 基础人设）
+  db.run(`
+    CREATE TABLE IF NOT EXISTS skills (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      content TEXT DEFAULT '',
+      grp TEXT DEFAULT '',
+      active INTEGER DEFAULT 0,
+      ord INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT (datetime('now', '+8 hours'))
+    )
+  `);
+
   // API 渠道预设：存多个渠道，一键切换（切换=把该渠道的地址/key/模型写进 settings）
   db.run(`
     CREATE TABLE IF NOT EXISTS api_channels (
