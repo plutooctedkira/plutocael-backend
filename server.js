@@ -32,6 +32,7 @@ app.use('/api/gateway', require('./routes/gateway'));
 app.use('/api/mcp', require('./routes/mcp'));
 app.use('/api/ombre-dashboard', require('./routes/ombre-dashboard'));
 app.use('/api/manage', require('./routes/manage'));
+app.use('/api/diary', require('./routes/diary'));
 
 const PORT = process.env.PORT || 3000;
 
