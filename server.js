@@ -21,6 +21,17 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', message: 'plutocael backend is running', db: 'sqlite' });
 });
 
+// 口令校验：前端拿它验一次，通过后把口令存本地，之后每个请求带 x-pluto-auth 头
+const { auth, check, enabled } = require('./middleware/auth');
+app.get('/api/auth', (req, res) => res.json({ required: enabled() }));
+app.post('/api/auth', (req, res) => {
+  if (!enabled()) return res.json({ ok: true, required: false });
+  if (check(req.body && req.body.password)) return res.json({ ok: true, required: true });
+  res.status(401).json({ error: '口令不对' });
+});
+// 以下所有路由都需要口令（未配置 APP_PASSWORD 时自动跳过）
+app.use(auth);
+
 // API 路由（不再需要传supabase）
 app.use('/api/sessions', require('./routes/sessions'));
 app.use('/api/messages', require('./routes/messages'));
