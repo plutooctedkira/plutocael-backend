@@ -68,29 +68,8 @@ async function execToolUses(toolUses, toolLogLines, onEvent) {
 
 const MAX_TOOL_ROUNDS = 5;
 
-// 流式剥离内联 <thinking>...</thinking>：标签内内容走 onThink，其余走 onText；标签可跨分片
-function makeThinkStripper(onText, onThink) {
-  const OPEN = '<thinking>', CLOSE = '</thinking>';
-  let inThink = false, buf = '';
-  const push = (chunk) => {
-    buf += chunk;
-    let go = true;
-    while (go) {
-      go = false;
-      if (!inThink) {
-        const i = buf.indexOf(OPEN);
-        if (i !== -1) { if (i > 0) onText(buf.slice(0, i)); buf = buf.slice(i + OPEN.length); inThink = true; go = true; }
-        else { const safe = buf.length - (OPEN.length - 1); if (safe > 0) { onText(buf.slice(0, safe)); buf = buf.slice(safe); } }
-      } else {
-        const j = buf.indexOf(CLOSE);
-        if (j !== -1) { if (j > 0) onThink(buf.slice(0, j)); buf = buf.slice(j + CLOSE.length); inThink = false; go = true; }
-        else { const safe = buf.length - (CLOSE.length - 1); if (safe > 0) { onThink(buf.slice(0, safe)); buf = buf.slice(safe); } }
-      }
-    }
-  };
-  const flush = () => { if (buf) { (inThink ? onThink : onText)(buf); buf = ''; } };
-  return { push, flush };
-}
+// 流式剥离内联 <thinking>...</thinking>（agent 那边也用同一份，见 services/anthropicStream.js）
+const { makeThinkStripper } = require('../services/anthropicStream');
 
 // 把本轮 usage 压成紧凑 JSON 存到消息上：{in,out,cr,cw}
 function compactUsage(u) {
