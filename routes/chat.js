@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { queryAll, queryOne, run, getBackgroundApiConfig } = require('../db');
+const { queryAll, queryOne, run, getBackgroundApiConfig , getTaskChannel} = require('../db');
 const { logUsage } = require('../gateway-tracker');
 const { listTools, callTool } = require('../mcp-client');
 
@@ -257,9 +257,11 @@ async function buildContext(session_id) {
   if (settings.api_key && !settingsKey) console.warn('settings.api_key 含非法字符(可能误填了模型名),已忽略并回退环境变量');
   const settingsBase = validHeader(settings.api_base_url);
 
-  const apiBaseUrl = (settingsBase || process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com') + '/v1/messages';
-  const apiKey = settingsKey || process.env.ANTHROPIC_API_KEY;
-  const model = settings.model || process.env.CLAUDE_MODEL || 'claude-sonnet-4-6';
+  // 设置里给"聊天"单独指定了渠道就用它，否则还是走 settings 主力配置
+  const pinned = getTaskChannel('chat');
+  const apiBaseUrl = pinned ? pinned.url : (settingsBase || process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com') + '/v1/messages';
+  const apiKey = pinned ? pinned.key : (settingsKey || process.env.ANTHROPIC_API_KEY);
+  const model = pinned ? pinned.model : (settings.model || process.env.CLAUDE_MODEL || 'claude-sonnet-4-6');
 
   return { settings, history, systemPrompt, apiBaseUrl, apiKey, model };
 }

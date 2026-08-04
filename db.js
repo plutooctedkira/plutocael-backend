@@ -126,6 +126,14 @@ async function initDB() {
     )
   `);
 
+  // 每类任务用哪个渠道（聊天/压缩/摘要/记忆/导入/工作台）。没配的任务走原来的回退链
+  db.run(`
+    CREATE TABLE IF NOT EXISTS task_models (
+      task TEXT PRIMARY KEY,
+      channel_id INTEGER NOT NULL
+    )
+  `);
+
   // 滚动上下文的摘要块：pending(生成中)/ready(完成待晋升)/committed(已注入请求)
   db.run(`
     CREATE TABLE IF NOT EXISTS context_summaries (
@@ -274,8 +282,23 @@ function lastInsertId() {
   return _lastInsertId;
 }
 
-// 后台任务（摘要/压缩）的 API 配置：便宜渠道优先，回退主力，再回退 env
-function getBackgroundApiConfig() {
+// 某类任务指定了渠道就用它；没指定返回 null，交给下面的原回退链
+function getTaskChannel(task) {
+  if (!task) return null;
+  try {
+    const row = queryOne(
+      "SELECT c.api_base_url, c.api_key, c.model FROM task_models t JOIN api_channels c ON c.id = t.channel_id WHERE t.task = ?",
+      [task]
+    );
+    if (!row || !row.api_base_url || !row.api_key) return null;
+    return { url: String(row.api_base_url).replace(/\/v1\/messages\/?$/, '') + '/v1/messages', key: row.api_key, model: row.model };
+  } catch (e) { return null; } // 表还没建/迁移中，静默回退
+}
+
+// 后台任务（摘要/压缩）的 API 配置：任务专属渠道 > 便宜渠道 > 主力 > env
+function getBackgroundApiConfig(task) {
+  const pinned = getTaskChannel(task);
+  if (pinned) return pinned;
   const s = queryOne("SELECT api_base_url, api_key, model, cheap_api_base_url, cheap_api_key, cheap_model FROM settings LIMIT 1") || {};
   const base = s.cheap_api_base_url || s.api_base_url || process.env.CHEAP_BASE_URL || process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com';
   const key = s.cheap_api_key || s.api_key || process.env.CHEAP_API_KEY || process.env.ANTHROPIC_API_KEY;
@@ -284,4 +307,4 @@ function getBackgroundApiConfig() {
   return { url: base.replace(/\/v1\/messages\/?$/, '') + '/v1/messages', key, model };
 }
 
-module.exports = { initDB, getDB, save, queryAll, queryOne, run, lastInsertId, getBackgroundApiConfig };
+module.exports = { initDB, getDB, save, queryAll, queryOne, run, lastInsertId, getBackgroundApiConfig, getTaskChannel };

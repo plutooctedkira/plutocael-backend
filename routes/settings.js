@@ -33,6 +33,37 @@ router.delete('/skills/:id', (req, res) => {
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ── 各类任务用哪个渠道 ──
+// 任务清单写死在这里：每一项都对应后端真实存在的调用点，不做没接上代码的空槽位
+const TASKS = [
+  { key: 'chat', label: '聊天', desc: '跟 Cael 对话的主力模型' },
+  { key: 'compress', label: '上下文压缩', desc: '把变长的旧对话压成摘要，建议用便宜快的' },
+  { key: 'summary', label: '分块摘要', desc: '给每段对话生成一句话，供记忆搜索用' },
+  { key: 'memory', label: '自动记忆', desc: '判断每轮对话值不值得记进记忆库' },
+  { key: 'import', label: '智能导入', desc: '解析清洗粘贴进来的聊天记录' },
+  { key: 'agent', label: '工作台', desc: '改代码的编码 agent，建议用强模型' },
+];
+
+router.get('/task-models', (req, res) => {
+  try {
+    const rows = queryAll("SELECT task, channel_id FROM task_models");
+    const map = Object.fromEntries(rows.map(r => [r.task, r.channel_id]));
+    res.json({ tasks: TASKS, assigned: map });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// channel_id 为 null/空 = 取消指定，回到默认回退链
+router.put('/task-models/:task', (req, res) => {
+  try {
+    const task = String(req.params.task);
+    if (!TASKS.some(t => t.key === task)) return res.status(400).json({ error: '未知任务' });
+    const cid = req.body && req.body.channel_id;
+    run("DELETE FROM task_models WHERE task = ?", [task]);
+    if (cid) run("INSERT INTO task_models (task, channel_id) VALUES (?, ?)", [task, Number(cid)]);
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // ── API 渠道预设：存多个，一键切换 ──
 router.get('/channels', (req, res) => {
   try { res.json({ channels: queryAll("SELECT id, name, api_base_url, api_key, model FROM api_channels ORDER BY id") }); }

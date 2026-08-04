@@ -19,6 +19,7 @@ function summarizeFrozen(session_id, startId, endId, summaryId) {
       const text = rows.map(m => `[${m.role === 'user' ? 'Jasmine' : 'Cael'}]: ${m.msg_type === 'image' ? '[图片]' : m.content}`).join('\n');
       const { bgComplete } = require('./bgLLM');
       const out = await bgComplete({
+        task: 'compress',
         system: '你是对话摘要助手。用第三人称把下面这段对话压缩成一段要点摘要（200-400字）。必须保留所有日期/时间/约定/数字/人名/地点/承诺/待办；禁止用"聊到了""讨论了"这类空话替代具体内容。只输出摘要正文。',
         user: text, maxTokens: 900, timeoutMs: 90000,
       });

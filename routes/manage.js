@@ -141,7 +141,7 @@ router.post('/import-smart', (req, res) => {
           for (const chunk of chunks) {
             if (importJob.cancelRequested) { importJob.status = 'cancelled'; console.log(`[import-smart] 已中断：暂存${importJob.imported}条后停止`); return; }
             try {
-              const out = await bgComplete({ system: IMPORT_PROMPT, user: chunk, maxTokens: 4000, timeoutMs: 120000 });
+              const out = await bgComplete({ task: 'import', system: IMPORT_PROMPT, user: chunk, maxTokens: 4000, timeoutMs: 120000 });
               const mm = out.match(/\[[\s\S]*\]/);
               if (mm) for (const item of JSON.parse(mm[0])) stage(item);
             } catch (e) { console.warn('[import-smart] 块处理失败:', e.message); }

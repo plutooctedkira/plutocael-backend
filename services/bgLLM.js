@@ -79,8 +79,9 @@ async function completeWith(cfg, { system, user, maxTokens = 500, timeoutMs = 30
 }
 
 // 用便宜渠道配置调一次（后台任务默认入口）
-async function bgComplete(opts) {
-  return completeWith(getBackgroundApiConfig(), opts);
+async function bgComplete(opts = {}) {
+  const { task, ...rest } = opts;
+  return completeWith(getBackgroundApiConfig(task), rest);
 }
 
 module.exports = { bgComplete, completeWith };

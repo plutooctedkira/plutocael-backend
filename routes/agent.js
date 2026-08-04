@@ -1,7 +1,7 @@
 // 编码 agent：直接在 VPS 上读写 Plutocael 的代码并部署
 // 复用 settings 里当前选中的渠道（跟 Cael 聊天同一套 key），不额外要 Anthropic 官方 key
 const router = require('express').Router();
-const { queryOne } = require('../db');
+const { queryOne, getTaskChannel } = require('../db');
 const { streamOnce } = require('../services/anthropicStream');
 const { TOOLS, runTool, ROOTS } = require('../services/codingTools');
 
@@ -39,6 +39,8 @@ ${ROOTS.map(r => '  ' + r).join('\n')}
 function creds() {
   const s = queryOne('SELECT * FROM settings LIMIT 1') || {};
   const ok = (v) => (v && /^[\x21-\x7E]+$/.test(String(v).trim()) ? String(v).trim() : null);
+  const pinned = getTaskChannel('agent'); // 设置里给"工作台"指定了渠道就用它
+  if (pinned) return { apiBaseUrl: pinned.url, apiKey: pinned.key, model: pinned.model, thinking: !!s.enable_thinking };
   const base = ok(s.api_base_url) || process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com';
   return {
     apiBaseUrl: base + '/v1/messages',

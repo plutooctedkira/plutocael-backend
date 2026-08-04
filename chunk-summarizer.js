@@ -6,6 +6,7 @@ async function summarizeChunk(chunkText) {
   try {
     const { bgComplete } = require('./services/bgLLM');
     const text = await bgComplete({
+      task: 'summary',
       system: '你是一个对话摘要器。用一到两句中文概括这段对话。不超过80字。'
         + '必须保留所有具体细节：日期、时间、地点、人名、数字。禁止抽象化。忽略sticker标记和纯语气词。',
       user: `请概括这段对话：\n\n${chunkText.substring(0, 800)}`,

@@ -30,7 +30,7 @@ async function classifyRound(userText, aiText) {
   const dialogue = `【Jasmine】${String(userText || '').slice(0, 2000)}\n\n【Cael】${String(aiText || '').slice(0, 2000)}`;
   try {
     const { bgComplete } = require('./bgLLM');
-    const text = await bgComplete({ system: CLASSIFY_PROMPT, user: dialogue, maxTokens: 300, timeoutMs: 30000 });
+    const text = await bgComplete({ task: 'memory', system: CLASSIFY_PROMPT, user: dialogue, maxTokens: 300, timeoutMs: 30000 });
     // 剥掉可能的 ```json 围栏，抓第一个 JSON 对象
     const m = text.match(/\{[\s\S]*\}/);
     if (!m) return null;
