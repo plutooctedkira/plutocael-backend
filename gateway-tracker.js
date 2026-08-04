@@ -55,7 +55,20 @@ function getStats(period = 'today') {
     ORDER BY cost DESC
   `);
 
-  return { summary, byModel };
+  // 按任务统计：聊天记的是数字 session_id，后台任务/工作台记的是中文标签，据此分开
+  const byTask = queryAll(`
+    SELECT session_id as task,
+      COALESCE(SUM(input_tokens), 0) as input_tokens,
+      COALESCE(SUM(output_tokens), 0) as output_tokens,
+      ROUND(COALESCE(SUM(cost_usd), 0), 4) as cost,
+      COUNT(*) as request_count
+    FROM gateway_usage
+    WHERE ${dateFilter} AND session_id NOT GLOB '[0-9]*' AND session_id != ''
+    GROUP BY session_id
+    ORDER BY cost DESC
+  `);
+
+  return { summary, byModel, byTask };
 }
 
 // 获取当前定价配置

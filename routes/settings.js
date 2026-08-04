@@ -34,15 +34,7 @@ router.delete('/skills/:id', (req, res) => {
 });
 
 // ── 各类任务用哪个渠道 ──
-// 任务清单写死在这里：每一项都对应后端真实存在的调用点，不做没接上代码的空槽位
-const TASKS = [
-  { key: 'chat', label: '聊天', desc: '跟 Cael 对话的主力模型' },
-  { key: 'compress', label: '上下文压缩', desc: '把变长的旧对话压成摘要，建议用便宜快的' },
-  { key: 'summary', label: '分块摘要', desc: '给每段对话生成一句话，供记忆搜索用' },
-  { key: 'memory', label: '自动记忆', desc: '判断每轮对话值不值得记进记忆库' },
-  { key: 'import', label: '智能导入', desc: '解析清洗粘贴进来的聊天记录' },
-  { key: 'agent', label: '工作台', desc: '改代码的编码 agent，建议用强模型' },
-];
+const { TASKS } = require('../services/tasks'); // 与用量记账共用同一份清单
 
 router.get('/task-models', (req, res) => {
   try {

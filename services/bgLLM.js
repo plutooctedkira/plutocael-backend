@@ -50,7 +50,7 @@ async function callOpenAI(root, key, model, system, user, maxTokens, timeoutMs) 
 }
 
 // 用指定配置调一次（test-api 等需要临时配置的场景用）
-async function completeWith(cfg, { system, user, maxTokens = 500, timeoutMs = 30000 }) {
+async function completeWith(cfg, { system, user, maxTokens = 500, timeoutMs = 30000, label = '后台任务' }) {
   const root = baseRoot(cfg.url || cfg.base);
   const key = cfg.key;
   const model = cfg.model;
@@ -67,7 +67,7 @@ async function completeWith(cfg, { system, user, maxTokens = 500, timeoutMs = 30
       if (r.ok) {
         formatCache.set(cacheKey, fmt);
         // 后台任务也记 token 账（session_id 固定为"后台任务"，用量页可区分）
-        try { require('../gateway-tracker').logUsage('后台任务', model, r.usage); } catch (e) {}
+        try { require('../gateway-tracker').logUsage(label, model, r.usage); } catch (e) {}
         return r.text;
       }
       let msg = r.body.slice(0, 300);
@@ -79,9 +79,11 @@ async function completeWith(cfg, { system, user, maxTokens = 500, timeoutMs = 30
 }
 
 // 用便宜渠道配置调一次（后台任务默认入口）
+const { labelOf } = require('./tasks');
+
 async function bgComplete(opts = {}) {
   const { task, ...rest } = opts;
-  return completeWith(getBackgroundApiConfig(task), rest);
+  return completeWith(getBackgroundApiConfig(task), { ...rest, label: labelOf(task) });
 }
 
 module.exports = { bgComplete, completeWith };

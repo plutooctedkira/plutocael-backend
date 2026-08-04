@@ -4,6 +4,7 @@ const router = require('express').Router();
 const { queryOne, getTaskChannel } = require('../db');
 const { streamOnce } = require('../services/anthropicStream');
 const { TOOLS, runTool, ROOTS } = require('../services/codingTools');
+const { labelOf } = require('../services/tasks');
 
 const MAX_ROUNDS = 40;      // agent 要连续调很多轮工具，比聊天的 5 轮高得多
 const MAX_TOKENS = 8000;    // 写代码需要的输出空间，比聊天的 2000 大
@@ -83,11 +84,13 @@ router.post('/stream', async (req, res) => {
       };
       if (thinking) body.thinking = { type: 'adaptive' };
 
-      const { assistantContent, stopReason } = await streamOnce({
+      const { assistantContent, stopReason, usage } = await streamOnce({
         apiBaseUrl, apiKey, body,
         onText: (t) => sse({ type: 'text', text: t }),
         onThinking: (t) => sse({ type: 'thinking', text: t }),
       });
+      // 工作台一次能跑几十轮，不记账的话完全看不出它烧了多少
+      try { require('../gateway-tracker').logUsage(labelOf('agent'), model, usage); } catch (e) {}
 
       if (assistantContent.length === 0) { sse({ type: 'error', text: '渠道返回了空内容，多半是这个中转渠道不稳，换个渠道再试' }); break; }
       convo.push({ role: 'assistant', content: assistantContent });
