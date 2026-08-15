@@ -101,6 +101,17 @@ async function initDB() {
     )
   `);
 
+  // 待办：首页的 Todo / Done List 共用一张表，done=1 的落到 Done List
+  db.run(`
+    CREATE TABLE IF NOT EXISTS todos (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      content TEXT NOT NULL,
+      done INTEGER DEFAULT 0,
+      done_at DATETIME,
+      created_at DATETIME DEFAULT (datetime('now', '+8 hours'))
+    )
+  `);
+
   // Skill：额外指令块，启用的会追加到 system prompt 末尾（不替换 Cael 基础人设）
   db.run(`
     CREATE TABLE IF NOT EXISTS skills (

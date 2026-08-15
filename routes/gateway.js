@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getStats, getCurrentPricing, getRecentLogs } = require('../gateway-tracker');
+const { getStats, getCurrentPricing, getRecentLogs, getDailyTokens } = require('../gateway-tracker');
 
 // 最近调用日志
 router.get('/logs', (req, res) => {
@@ -21,6 +21,16 @@ router.get('/stats', (req, res) => {
   } catch (err) {
     console.error('Gateway stats error:', err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// 按天的 token 趋势（首页图表）
+router.get('/daily', (req, res) => {
+  try {
+    res.json({ days: getDailyTokens(req.query.days) });
+  } catch (err) {
+    console.error('Gateway daily error:', err);
+    res.status(500).json({ error: err.message, days: [] });
   }
 });
 

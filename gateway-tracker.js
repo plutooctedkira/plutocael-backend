@@ -71,6 +71,22 @@ function getStats(period = 'today') {
   return { summary, byModel, byTask };
 }
 
+// 按天的 token 趋势（首页图表用）：命中缓存 / 未命中缓存 / 输出
+// 未命中缓存＝input + cache_write，都是这次真读进去、没走缓存的部分
+function getDailyTokens(days = 30) {
+  const n = Math.max(1, Math.min(180, Number(days) || 30));
+  return queryAll(`
+    SELECT date(created_at) as day,
+      COALESCE(SUM(cache_read_tokens), 0) as cache_hit,
+      COALESCE(SUM(input_tokens) + SUM(cache_write_tokens), 0) as cache_miss,
+      COALESCE(SUM(output_tokens), 0) as output,
+      ROUND(COALESCE(SUM(cost_usd), 0), 4) as cost
+    FROM gateway_usage
+    WHERE date(created_at) >= date('now', '+8 hours', '-${n - 1} days')
+    GROUP BY day ORDER BY day
+  `);
+}
+
 // 获取当前定价配置
 function getCurrentPricing() {
   return queryAll("SELECT * FROM pricing_config WHERE is_current = 1 ORDER BY id");
@@ -85,4 +101,4 @@ function getRecentLogs(limit = 50) {
   `, [Math.min(200, Math.max(1, Number(limit) || 50))]);
 }
 
-module.exports = { logUsage, getStats, getCurrentPricing, getRecentLogs };
+module.exports = { logUsage, getStats, getCurrentPricing, getRecentLogs, getDailyTokens };

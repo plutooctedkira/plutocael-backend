@@ -43,6 +43,7 @@ app.use('/api/gateway', require('./routes/gateway'));
 app.use('/api/mcp', require('./routes/mcp'));
 app.use('/api/ombre-dashboard', require('./routes/ombre-dashboard'));
 app.use('/api/manage', require('./routes/manage'));
+app.use('/api/todos', require('./routes/todos'));
 app.use('/api/diary', require('./routes/diary'));
 app.use('/api/agent', require('./routes/agent'));
 
