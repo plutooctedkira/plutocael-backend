@@ -293,6 +293,13 @@ function lastInsertId() {
   return _lastInsertId;
 }
 
+// 地址归一化：剥掉结尾的 /、/v1/messages、/v1/chat/completions、/v1，
+// 只留到域名。设置页里填 https://x.com/v1 是最常见的手滑，不剥的话会拼成 /v1/v1/messages 报 404
+const apiRoot = (u) => String(u || '').trim()
+  .replace(/\/+$/, '')
+  .replace(/\/v1\/(messages|chat\/completions)$/, '')
+  .replace(/\/v1$/, '');
+
 // 某类任务指定了渠道就用它；没指定返回 null，交给下面的原回退链
 function getTaskChannel(task) {
   if (!task) return null;
@@ -302,7 +309,7 @@ function getTaskChannel(task) {
       [task]
     );
     if (!row || !row.api_base_url || !row.api_key) return null;
-    return { url: String(row.api_base_url).replace(/\/v1\/messages\/?$/, '') + '/v1/messages', key: row.api_key, model: row.model };
+    return { url: apiRoot(row.api_base_url) + '/v1/messages', key: row.api_key, model: row.model };
   } catch (e) { return null; } // 表还没建/迁移中，静默回退
 }
 
@@ -315,7 +322,7 @@ function getBackgroundApiConfig(task) {
   const key = s.cheap_api_key || s.api_key || process.env.CHEAP_API_KEY || process.env.ANTHROPIC_API_KEY;
   // 便宜渠道没配模型时回退主力模型：第三方代理的模型名带渠道前缀，裸模型名会503
   const model = s.cheap_model || process.env.CHEAP_MODEL || process.env.SUMMARY_MODEL || s.model || 'claude-sonnet-4-6';
-  return { url: base.replace(/\/v1\/messages\/?$/, '') + '/v1/messages', key, model };
+  return { url: apiRoot(base) + '/v1/messages', key, model };
 }
 
-module.exports = { initDB, getDB, save, queryAll, queryOne, run, lastInsertId, getBackgroundApiConfig, getTaskChannel };
+module.exports = { initDB, getDB, save, queryAll, queryOne, run, lastInsertId, getBackgroundApiConfig, getTaskChannel, apiRoot };

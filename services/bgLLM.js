@@ -5,9 +5,10 @@ const { getBackgroundApiConfig } = require('../db');
 
 const formatCache = new Map(); // `${root}|${model}` -> 'anthropic' | 'openai'
 
-const baseRoot = (url) => String(url || '')
-  .replace(/\/v1\/(messages|chat\/completions)\/?$/, '')
-  .replace(/\/$/, '');
+const baseRoot = (url) => String(url || '').trim()
+  .replace(/\/+$/, '')
+  .replace(/\/v1\/(messages|chat\/completions)$/, '')
+  .replace(/\/v1$/, '');
 
 async function fetchWithTimeout(url, options, timeoutMs) {
   const ctrl = new AbortController();

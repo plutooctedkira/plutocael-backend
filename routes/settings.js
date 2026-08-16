@@ -148,36 +148,19 @@ router.post('/test-api', async (req, res) => {
     const warn = [];
     if (body.api_key && !valid(body.api_key)) warn.push('API Key 含中文或非法字符（你可能贴错了内容），已忽略、走回退');
     if (body.api_base_url && !valid(body.api_base_url)) warn.push('API 地址含非法字符，已忽略');
-    let base, key, model;
-    if (channel === 'cheap') {
-      base = valid(body.api_base_url) || valid(s.cheap_api_base_url) || valid(s.api_base_url) || process.env.CHEAP_BASE_URL || process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com';
-      key = valid(body.api_key) || valid(s.cheap_api_key) || valid(s.api_key) || process.env.CHEAP_API_KEY || process.env.ANTHROPIC_API_KEY;
-      model = (body.model || s.cheap_model || process.env.CHEAP_MODEL || s.model || 'claude-sonnet-4-6').trim();
-      // 便宜渠道走后台任务同款的双格式调用(自动兼容 Anthropic/OpenAI 如 DeepSeek 官方)
-      try {
-        const { completeWith } = require('../services/bgLLM');
-        await completeWith({ url: base, key, model }, { system: 'test', user: 'hi', maxTokens: 5, timeoutMs: 15000 });
-        return res.json({ ok: true, model, channel, warnings: warn });
-      } catch (err) {
-        return res.json({ ok: false, status: err.status, model, channel, error: err.message, warnings: warn });
-      }
-    } else {
-      base = valid(body.api_base_url) || valid(s.api_base_url) || process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com';
-      key = valid(body.api_key) || valid(s.api_key) || process.env.ANTHROPIC_API_KEY;
-      model = (body.model || s.model || process.env.CLAUDE_MODEL || 'claude-sonnet-4-6').trim();
+    // 主力/便宜的区分已经去掉了，测试一律走双格式探测：
+    // 先试 Anthropic(/v1/messages)，不通再试 OpenAI(/v1/chat/completions)，
+    // 这样第三方中转和 DeepSeek 官方这类 OpenAI 格式的都能测通
+    const base = valid(body.api_base_url) || valid(s.api_base_url) || process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com';
+    const key = valid(body.api_key) || valid(s.api_key) || process.env.ANTHROPIC_API_KEY;
+    const model = (body.model || s.model || process.env.CLAUDE_MODEL || 'claude-sonnet-4-6').trim();
+    try {
+      const { completeWith } = require('../services/bgLLM');
+      await completeWith({ url: base, key, model }, { system: 'test', user: 'hi', maxTokens: 5, timeoutMs: 15000 });
+      return res.json({ ok: true, model, channel, warnings: warn });
+    } catch (err) {
+      return res.json({ ok: false, status: err.status, model, channel, error: err.message, warnings: warn });
     }
-    const r = await fetch(base.replace(/\/v1\/messages\/?$/, '') + '/v1/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({ model, max_tokens: 5, messages: [{ role: 'user', content: 'hi' }] })
-    });
-    const text = await r.text();
-    if (!r.ok) {
-      let msg = text.slice(0, 300);
-      try { const j = JSON.parse(text); msg = (j.error && (j.error.message || j.error.code)) || msg; } catch (e) {}
-      return res.json({ ok: false, status: r.status, model, error: msg, warnings: warn });
-    }
-    res.json({ ok: true, model, warnings: warn });
   } catch (err) {
     res.json({ ok: false, error: err.message });
   }
