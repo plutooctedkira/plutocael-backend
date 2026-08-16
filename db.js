@@ -79,7 +79,8 @@ async function initDB() {
     'cheap_api_base_url TEXT', 'cheap_api_key TEXT', 'cheap_model TEXT',
     'appearance TEXT', 'wallpaper TEXT', 'avatar_user TEXT', 'avatar_ai TEXT',
     'use_history INTEGER DEFAULT 1', 'time_hint INTEGER DEFAULT 1', 'date_mark INTEGER DEFAULT 1',
-    'ctx_manage INTEGER DEFAULT 1', 'ctx_active_rounds INTEGER DEFAULT 8', 'ctx_summary_keep INTEGER DEFAULT 3']) {
+    'ctx_manage INTEGER DEFAULT 1', 'ctx_active_rounds INTEGER DEFAULT 8', 'ctx_summary_keep INTEGER DEFAULT 3',
+    'user_prompt TEXT']) {
     try { db.run(`ALTER TABLE settings ADD COLUMN ${col}`); } catch (e) { /* 列已存在 */ }
   }
 

@@ -215,6 +215,11 @@ async function buildContext(session_id) {
   // 人设+记忆+留言 → 变化少，打 cache 标记；当前时间 → 每次都变，放最后单独一块
   let stablePart = settings.system_prompt || '你是Cael。';
 
+  // 我的人设：紧跟在 Cael 人设后面，让他知道在跟谁说话
+  if (settings.user_prompt && settings.user_prompt.trim()) {
+    stablePart += `\n\n【关于 Jasmine】\n${settings.user_prompt.trim()}`;
+  }
+
   // 追加启用的 skill（额外指令块，不替换基础人设）
   try {
     const skills = queryAll("SELECT name, content FROM skills WHERE active = 1 AND content != '' ORDER BY grp, ord, id");
